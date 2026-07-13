@@ -13,6 +13,8 @@ def default_config() -> dict:
         "govee": {"api_key": "", "devices": [], "brightness": 75},
         "home_assistant": {"url": "", "token": ""},
         "element_colors": dict(ELEMENT_COLORS),
+        "element_outputs": {},
+        "element_combos": {},
         "figure_overrides": {},
         "behavior": {"on_remove": "leave", "remove_color": "#000000", "cooldown_seconds": 1.0},
     }

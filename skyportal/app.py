@@ -42,7 +42,7 @@ def create_app(store=None, start_controller=True):
     @authenticated
     def index():
         return render_template(
-            "index.html", config=store.data, state=controller.state,
+            "index.html", config=store.public(), state=controller.state,
             elements=ELEMENT_COLORS, figures=FIGURES,
         )
 
@@ -63,6 +63,17 @@ def create_app(store=None, start_controller=True):
                 value = data["element_colors"].get(element)
                 if value and len(value) == 7 and value.startswith("#"):
                     store.data["element_colors"][element] = value.upper()
+        if "element_outputs" in data:
+            store.data["element_outputs"] = {
+                element: outputs for element, outputs in data["element_outputs"].items()
+                if element in ELEMENT_COLORS and isinstance(outputs, dict)
+            }
+        if "element_combos" in data:
+            store.data["element_combos"] = {
+                key: combo for key, combo in data["element_combos"].items()
+                if isinstance(combo, dict) and len(combo.get("elements", [])) == 2
+                and all(element in ELEMENT_COLORS for element in combo["elements"])
+            }
         if ha.get("url") is not None:
             store.data["home_assistant"]["url"] = ha["url"].strip().rstrip("/")
         if ha.get("token") and ha["token"] != "configured":
@@ -88,6 +99,22 @@ def create_app(store=None, start_controller=True):
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
 
+    @app.post("/api/govee/scenes")
+    @authenticated
+    def discover_govee_scenes():
+        candidate = request.get_json(silent=True) or {}
+        device_id = candidate.get("device")
+        device = next((item for item in store.data["govee"]["devices"] if item.get("device") == device_id), None)
+        if not device:
+            return jsonify({"ok": False, "error": "Select and save this light first."}), 404
+        key = store.data["govee"]["api_key"]
+        if not key:
+            return jsonify({"ok": False, "error": "Configure a Govee API key first."}), 400
+        try:
+            return jsonify({"ok": True, "scenes": GoveeClient(key).discover_scenes(device)})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
     @app.post("/api/test/<element>")
     @authenticated
     def test_element(element):
@@ -95,6 +122,19 @@ def create_app(store=None, start_controller=True):
             return jsonify({"ok": False, "error": "Unknown element"}), 404
         try:
             controller.handle_figure(next(fid for fid, f in FIGURES.items() if f["element"] == element))
+            return jsonify({"ok": True})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.post("/api/test-combo")
+    @authenticated
+    def test_combo():
+        elements = (request.get_json(silent=True) or {}).get("elements", [])
+        if len(elements) != 2 or any(element not in ELEMENT_COLORS for element in elements):
+            return jsonify({"ok": False, "error": "Choose two valid elements."}), 400
+        try:
+            figures = [next(figure for figure in FIGURES.values() if figure["element"] == element) for element in elements]
+            controller.handle_figures(figures)
             return jsonify({"ok": True})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502

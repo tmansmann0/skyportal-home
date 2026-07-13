@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.2.0 — 2026-07-12
+
+- Add per-element, per-light color and brightness profiles
+- Add device-supported Govee scene and music-mode outputs
+- Detect multiple figures and combine SWAP Force halves as one character
+- Add advanced two-element profiles with automatic even light splitting
+- Isolate individual Govee failures so one offline light does not block others
+- Hide the save bar until configuration changes exist
+- Keep stored API keys and Home Assistant tokens out of rendered dashboard HTML
+
 ## 1.1.0 — 2026-07-12
 
 - Add a pinned 684-record, all-generation identification database
