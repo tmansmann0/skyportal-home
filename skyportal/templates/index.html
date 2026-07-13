@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SkyPortal Home</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"></head>
+<body><header><div><span class="eyebrow">PORTAL OF POWER CONTROLLER</span><h1>SkyPortal Home</h1></div>
+<div id="portalStatus" class="status {{ state.portal }}"><i></i><span>{{ state.portal }}</span></div></header>
+<main>
+<section class="hero"><div><span class="eyebrow">NOW ON THE PORTAL</span><h2 id="figureName">{{ state.figure.name if state.figure else 'Waiting for a Skylander…' }}</h2><p id="figureMeta">{{ state.figure.element|title if state.figure else 'Place a figure to trigger your lights.' }}</p></div><div id="orb" class="orb" style="--orb:{{ state.figure.color if state.figure else '#456078' }}"></div></section>
+
+<div id="notice" class="notice hidden"></div>
+<section><div class="section-title"><div><span class="step">01</span><h2>Govee lights</h2></div><p>Select every light that should react.</p></div>
+<div class="panel grid2"><label>Govee API key<input id="goveeKey" type="password" placeholder="{{ 'Saved — enter only to replace' if config.govee.api_key else 'Paste API key' }}"></label>
+<label>Brightness <span id="brightnessLabel">{{ config.govee.brightness }}%</span><input id="brightness" type="range" min="1" max="100" value="{{ config.govee.brightness }}"></label>
+<div class="span2 actions"><button type="button" class="secondary" id="discover">Discover devices</button></div><div id="devices" class="device-list span2"></div></div></section>
+
+<section><div class="section-title"><div><span class="step">02</span><h2>Element palette</h2></div><p>Defaults match the classic elements. Tune them for your room.</p></div>
+<div class="element-grid">{% for element, default in elements.items() %}<article class="element-card" data-element="{{ element }}"><div class="swatch" style="--color:{{ config.element_colors[element] }}"><span>{{ element[0]|upper }}</span></div><div><strong>{{ element|title }}</strong><input class="element-color" type="color" value="{{ config.element_colors[element] }}"></div><button type="button" class="test">Test</button></article>{% endfor %}</div></section>
+
+<section><div class="section-title"><div><span class="step">03</span><h2>Home Assistant & figure overrides</h2></div><p>Optional. A specific figure can override its element color or activate a scene.</p></div>
+<div class="panel grid2"><label>Home Assistant URL<input id="haUrl" placeholder="http://homeassistant.local:8123" value="{{ config.home_assistant.url }}"></label><label>Long-lived access token<input id="haToken" type="password" placeholder="{{ 'Saved — enter only to replace' if config.home_assistant.token else 'Optional' }}"></label>
+<div class="span2 override-add"><select id="figureSelect">{% for id, f in figures.items() %}<option value="{{ id }}">{{ f.name }} ({{ f.element|title }})</option>{% endfor %}</select><input id="overrideColor" type="color" value="#8E44FF"><input id="haScene" placeholder="scene.portal_spyro"><button type="button" class="secondary" id="addOverride">Add override</button></div><div id="overrides" class="span2"></div></div></section>
+
+<div class="savebar"><span id="saveState">Changes stay on this Pi.</span><button id="save">Save configuration</button></div>
+</main><script>window.INITIAL_CONFIG={{ config|tojson }};window.FIGURES={{ figures|tojson }};</script><script src="{{ url_for('static', filename='app.js') }}"></script></body></html>

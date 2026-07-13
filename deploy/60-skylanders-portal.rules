@@ -1,0 +1,2 @@
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="1430", ATTRS{idProduct}=="0150", GROUP="skyportal", MODE="0660", TAG+="systemd"
+SUBSYSTEM=="usb", ATTR{idVendor}=="1430", ATTR{idProduct}=="0150", GROUP="skyportal", MODE="0660"

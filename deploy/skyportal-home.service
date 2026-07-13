@@ -1,0 +1,24 @@
+[Unit]
+Description=SkyPortal Home Controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=skyportal
+Group=skyportal
+WorkingDirectory=/opt/skyportal-home
+Environment=PYTHONUNBUFFERED=1
+Environment=SKYPORTAL_CONFIG=/var/lib/skyportal-home/config.json
+Environment=SKYPORTAL_PORT=8099
+ExecStart=/opt/skyportal-home/.venv/bin/python -m skyportal.app
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/skyportal-home
+
+[Install]
+WantedBy=multi-user.target
