@@ -105,14 +105,20 @@ def _swap_name(figure: dict) -> str:
 
 def identify_present(identities: list[tuple[int, int]]) -> dict | None:
     """Identify the displayed figure, combining a pair of SWAP Force tags."""
+    figures = identify_all_present(identities)
+    return figures[0] if figures else None
+
+
+def identify_all_present(identities: list[tuple[int, int]]) -> list[dict]:
+    """Identify every figure, treating a SWAP Force pair as one character."""
     if not identities:
-        return None
+        return []
 
     figures = [identify(character_id, variant_id) for character_id, variant_id in identities]
     first = next((figure for figure in figures if 2000 <= figure["id"] <= 2015), None)
     second = next((figure for figure in figures if 1000 <= figure["id"] <= 1015), None)
     if not first or not second:
-        return figures[0]
+        return figures
 
     first_base = _swap_name(FIGURES[first["id"]])
     second_base = _swap_name(FIGURES[second["id"]])
@@ -125,7 +131,7 @@ def identify_present(identities: list[tuple[int, int]]) -> dict | None:
     else:
         name = f"{first_base} {second_base}"
 
-    return {
+    combined = {
         "id": first["id"],
         "variant_id": first["variant_id"],
         "variant_known": first["variant_known"] and second["variant_known"],
@@ -133,3 +139,4 @@ def identify_present(identities: list[tuple[int, int]]) -> dict | None:
         "element": _SWAP_ELEMENTS[first["id"] - 2000],
         "swap_parts": [first, second],
     }
+    return [combined, *(figure for figure in figures if figure not in (first, second))]

@@ -39,6 +39,38 @@ class GoveeClient:
         if payload.get("code") not in (None, 200):
             raise OutputError(payload.get("message") or payload.get("msg") or "Govee control failed")
 
+    def _device_request(self, device: dict, endpoint: str) -> dict:
+        body = {"requestId": str(uuid.uuid4()), "payload": {
+            "sku": device["sku"], "device": device["device"],
+        }}
+        response = self.session.post(f"{self.BASE}/{endpoint}", headers=self.headers, json=body, timeout=12)
+        response.raise_for_status()
+        payload = response.json()
+        if payload.get("code") != 200:
+            raise OutputError(payload.get("message") or payload.get("msg") or "Govee request failed")
+        return payload.get("payload", {})
+
+    def discover_scenes(self, device: dict) -> list[dict]:
+        scenes = []
+        for endpoint in ("device/scenes", "device/diy-scenes"):
+            payload = self._device_request(device, endpoint)
+            for capability in payload.get("capabilities", []):
+                for option in capability.get("parameters", {}).get("options", []):
+                    scenes.append({
+                        "name": option.get("name", "Unnamed scene"),
+                        "capability": {
+                            "type": capability["type"],
+                            "instance": capability["instance"],
+                            "value": option.get("value"),
+                        },
+                    })
+        return scenes
+
+    def set_capability(self, device: dict, capability: dict, power_on: bool = True):
+        if power_on:
+            self._control(device, {"type": "devices.capabilities.on_off", "instance": "powerSwitch", "value": 1})
+        self._control(device, capability)
+
     def set_color(self, device: dict, hex_color: str, brightness: int = 75):
         rgb = int(hex_color.lstrip("#"), 16)
         self._control(device, {"type": "devices.capabilities.on_off", "instance": "powerSwitch", "value": 1})

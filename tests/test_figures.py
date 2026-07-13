@@ -1,4 +1,4 @@
-from skyportal.figures import DATABASE_RECORDS, FIGURE_VARIANTS, FIGURES, identify, identify_present
+from skyportal.figures import DATABASE_RECORDS, FIGURE_VARIANTS, FIGURES, identify, identify_all_present, identify_present
 
 
 def test_all_generation_database_is_loaded():
@@ -40,3 +40,8 @@ def test_swap_force_variant_name_is_preserved():
     figure = identify_present([(2015, 9218), (1015, 9218)])
     assert figure["name"] == "Dark Wash Buckler"
     assert figure["element"] == "water"
+
+
+def test_multiple_figures_are_preserved_while_swap_halves_combine():
+    figures = identify_all_present([(2004, 8192), (1004, 8192), (100, 4096)])
+    assert [figure["name"] for figure in figures] == ["Blast Zone", "Jet-Vac"]

@@ -2,7 +2,7 @@ import logging
 import threading
 import time
 
-from .figures import identify, identify_present
+from .figures import identify, identify_all_present
 from .outputs import GoveeClient, HomeAssistantClient
 from .portal import Portal
 
@@ -42,8 +42,7 @@ class Controller:
                     identity = self.portal.read_identity(slot)
                     current[slot] = identity
                 if current and current != self.last_slots:
-                    figure = identify_present(list(current.values()))
-                    self.handle_figure(figure["id"], figure["variant_id"], figure)
+                    self.handle_figures(identify_all_present(list(current.values())))
                 if self.last_slots and not current:
                     self.handle_remove()
                 self.last_slots = current
@@ -75,10 +74,83 @@ class Controller:
                 HomeAssistantClient(ha["url"], ha["token"]).activate_scene(scene)
             if config["govee"]["api_key"]:
                 client = GoveeClient(config["govee"]["api_key"])
+                element_outputs = config.get("element_outputs", {}).get(figure["element"], {})
+                device_errors = []
                 for device in config["govee"]["devices"]:
-                    client.set_color(device, color, int(config["govee"]["brightness"]))
+                    try:
+                        output = element_outputs.get(device["device"], {})
+                        mode = output.get("mode", "color")
+                        if mode in ("scene", "music") and output.get("capability"):
+                            client.set_capability(device, output["capability"])
+                        else:
+                            client.set_color(
+                                device, output.get("color") or color,
+                                int(output.get("brightness", config["govee"]["brightness"])),
+                            )
+                    except Exception as exc:
+                        name = device.get("deviceName") or device.get("sku") or device["device"]
+                        log.exception("Govee output error for %s", name)
+                        device_errors.append(f"{name}: {exc}")
+                if device_errors:
+                    self.state["last_error"] = "; ".join(device_errors)
         except Exception as exc:
             log.exception("Output error")
+            self.state["last_error"] = str(exc)
+
+    def handle_figures(self, figures: list[dict]):
+        if not figures:
+            return
+        config = self.store.data
+        devices = config["govee"]["devices"]
+        distinct_elements = []
+        for figure in figures:
+            if figure["element"] not in distinct_elements:
+                distinct_elements.append(figure["element"])
+        if len(devices) < 2 or len(distinct_elements) < 2:
+            first = figures[0]
+            self.handle_figure(first["id"], first.get("variant_id", 0), first)
+            return
+
+        elements = sorted(distinct_elements[:2])
+        key = "+".join(elements)
+        combo = config.get("element_combos", {}).get(key, {})
+        colors = combo.get("colors", {})
+        display = {
+            "id": figures[0]["id"], "variant_id": figures[0].get("variant_id", 0),
+            "name": " + ".join(figure["name"] for figure in figures),
+            "element": " + ".join(elements), "elements": elements, "combo": True,
+            "color": colors.get(elements[0]) or config["element_colors"][elements[0]],
+        }
+        self.state.update({"figure": display, "figures": figures, "last_error": None, "updated_at": time.time()})
+        try:
+            if self.portal:
+                self.portal.set_color(display["color"])
+            if not config["govee"]["api_key"]:
+                return
+            client = GoveeClient(config["govee"]["api_key"])
+            outputs = combo.get("outputs", {})
+            split = (len(devices) + 1) // 2
+            errors = []
+            for index, device in enumerate(devices):
+                assigned_element = elements[0] if index < split else elements[1]
+                assigned_color = colors.get(assigned_element) or config["element_colors"][assigned_element]
+                output = outputs.get(device["device"], {})
+                try:
+                    if output.get("mode") in ("scene", "music") and output.get("capability"):
+                        client.set_capability(device, output["capability"])
+                    else:
+                        client.set_color(
+                            device, output.get("color") or assigned_color,
+                            int(output.get("brightness", config["govee"]["brightness"])),
+                        )
+                except Exception as exc:
+                    name = device.get("deviceName") or device.get("sku") or device["device"]
+                    log.exception("Govee combo output error for %s", name)
+                    errors.append(f"{name}: {exc}")
+            if errors:
+                self.state["last_error"] = "; ".join(errors)
+        except Exception as exc:
+            log.exception("Combo output error")
             self.state["last_error"] = str(exc)
 
     def handle_remove(self):
