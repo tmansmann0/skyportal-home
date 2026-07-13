@@ -17,7 +17,10 @@ class Controller:
         self.stop_event = threading.Event()
         self.thread = None
         self.last_slots = {}
-        self.state = {"portal": "disconnected", "figure": None, "last_error": None, "updated_at": None}
+        self.state = {
+            "portal": "disconnected", "figure": None, "figures": [],
+            "last_error": None, "updated_at": None,
+        }
 
     def start(self):
         if not self.thread or not self.thread.is_alive():
@@ -37,12 +40,11 @@ class Controller:
                     self.portal.connect()
                     self.state["portal"] = "connected"
                 slots = self.portal.status()
-                current = {}
-                for slot in slots:
-                    identity = self.portal.read_identity(slot)
-                    current[slot] = identity
+                current = {slot: self.portal.read_identity(slot) for slot in slots}
                 if current and current != self.last_slots:
                     self.handle_figures(identify_all_present(list(current.values())))
+                if not current and not self.last_slots and self.state["updated_at"] is None:
+                    self.handle_default()
                 if self.last_slots and not current:
                     self.handle_remove()
                 self.last_slots = current
@@ -58,47 +60,98 @@ class Controller:
                 self.portal = None
                 self.stop_event.wait(2)
 
+    def _record(self, event: str, label: str, detail: str = ""):
+        entry = {"at": time.time(), "event": event, "label": label, "detail": detail}
+        history = self.store.data.setdefault("history", [])
+        history.insert(0, entry)
+        del history[50:]
+        try:
+            self.store.save()
+        except Exception:
+            log.exception("Could not save history")
+
+    def _remember(self, figure: dict):
+        key = "recent_powerups" if figure.get("kind") == "power_up" else "recent_figures"
+        recent = self.store.data.setdefault(key, [])
+        character_id = figure["id"]
+        recent[:] = [item for item in recent if item != character_id]
+        recent.insert(0, character_id)
+        del recent[12:]
+
+    def _activate_ha(self, scene: str):
+        scene = (scene or "").strip()
+        ha = self.store.data["home_assistant"]
+        if scene and ha["url"] and ha["token"]:
+            HomeAssistantClient(ha["url"], ha["token"]).activate_scene(scene)
+
+    def _apply_outputs(self, base_color: str, outputs: dict, lights_enabled: bool = True):
+        config = self.store.data
+        if not lights_enabled or not config["govee"]["api_key"]:
+            return []
+        client = GoveeClient(config["govee"]["api_key"])
+        errors = []
+        for device in config["govee"]["devices"]:
+            try:
+                output = outputs.get(device["device"], {})
+                if output.get("mode") in ("scene", "music") and output.get("capability"):
+                    client.set_capability(device, output["capability"])
+                else:
+                    client.set_color(
+                        device, output.get("color") or base_color,
+                        int(output.get("brightness", config["govee"]["brightness"])),
+                    )
+            except Exception as exc:
+                name = device.get("deviceName") or device.get("sku") or device["device"]
+                log.exception("Govee output error for %s", name)
+                errors.append(f"{name}: {exc}")
+        return errors
+
+    def _activate_palette(self, label: str, color: str, outputs: dict, action: dict, event="palette"):
+        errors = []
+        try:
+            self._activate_ha(action.get("ha_scene", ""))
+        except Exception as exc:
+            log.exception("Home Assistant output error")
+            errors.append(f"Home Assistant: {exc}")
+        errors.extend(self._apply_outputs(color, outputs, action.get("lights_enabled", True)))
+        self.state["last_error"] = "; ".join(errors) if errors else None
+        self._record(event, label, action.get("ha_scene", ""))
+
     def handle_figure(self, character_id: int, variant_id: int = 0, figure=None):
         figure = dict(figure or identify(character_id, variant_id))
         config = self.store.data
-        override = config["figure_overrides"].get(str(character_id), {})
-        color = override.get("color") or config["element_colors"][figure["element"]]
+        self._remember(figure)
+        collection = config.setdefault("powerup_palettes" if figure.get("kind") == "power_up" else "figure_palettes", {})
+        profile = collection.get(str(character_id))
+        legacy = config.get("figure_overrides", {}).get(str(character_id), {})
+        if profile:
+            color = profile.get("color") or config["element_colors"].get(figure["element"]) or config["element_colors"].get("unknown", "#708090")
+            outputs = profile.get("outputs", {})
+            action = profile
+            label = f"{figure['name']} palette"
+        else:
+            color = legacy.get("color") or config["element_colors"].get(figure["element"]) or config["element_colors"].get("unknown", "#708090")
+            outputs = config["element_outputs"].get(figure["element"], {})
+            action = dict(config.get("element_actions", {}).get(figure["element"], {}))
+            if legacy.get("ha_scene"):
+                action["ha_scene"] = legacy["ha_scene"]
+            label = f"{figure['element'].title()} palette"
         figure["color"] = color
-        self.state.update({"figure": figure, "last_error": None, "updated_at": time.time()})
-        try:
-            if self.portal:
-                self.portal.set_color(color)
-            scene = override.get("ha_scene", "").strip()
-            ha = config["home_assistant"]
-            if scene and ha["url"] and ha["token"]:
-                HomeAssistantClient(ha["url"], ha["token"]).activate_scene(scene)
-            if config["govee"]["api_key"]:
-                client = GoveeClient(config["govee"]["api_key"])
-                element_outputs = config.get("element_outputs", {}).get(figure["element"], {})
-                device_errors = []
-                for device in config["govee"]["devices"]:
-                    try:
-                        output = element_outputs.get(device["device"], {})
-                        mode = output.get("mode", "color")
-                        if mode in ("scene", "music") and output.get("capability"):
-                            client.set_capability(device, output["capability"])
-                        else:
-                            client.set_color(
-                                device, output.get("color") or color,
-                                int(output.get("brightness", config["govee"]["brightness"])),
-                            )
-                    except Exception as exc:
-                        name = device.get("deviceName") or device.get("sku") or device["device"]
-                        log.exception("Govee output error for %s", name)
-                        device_errors.append(f"{name}: {exc}")
-                if device_errors:
-                    self.state["last_error"] = "; ".join(device_errors)
-        except Exception as exc:
-            log.exception("Output error")
-            self.state["last_error"] = str(exc)
+        self.state.update({"figure": figure, "figures": [figure], "updated_at": time.time()})
+        if self.portal:
+            self.portal.set_color(color)
+        self._activate_palette(label, color, outputs, action, "power_up" if figure.get("kind") == "power_up" else "figure")
 
     def handle_figures(self, figures: list[dict]):
         if not figures:
+            return
+        self.state["figures"] = figures
+        for figure in figures:
+            self._remember(figure)
+        powerups = [figure for figure in figures if figure.get("kind") == "power_up"]
+        if powerups:
+            self.handle_figure(powerups[0]["id"], powerups[0].get("variant_id", 0), powerups[0])
+            self.state["figures"] = figures
             return
         config = self.store.data
         devices = config["govee"]["devices"]
@@ -109,8 +162,8 @@ class Controller:
         if len(devices) < 2 or len(distinct_elements) < 2:
             first = figures[0]
             self.handle_figure(first["id"], first.get("variant_id", 0), first)
+            self.state["figures"] = figures
             return
-
         elements = sorted(distinct_elements[:2])
         key = "+".join(elements)
         combo = config.get("element_combos", {}).get(key, {})
@@ -121,46 +174,26 @@ class Controller:
             "element": " + ".join(elements), "elements": elements, "combo": True,
             "color": colors.get(elements[0]) or config["element_colors"][elements[0]],
         }
-        self.state.update({"figure": display, "figures": figures, "last_error": None, "updated_at": time.time()})
-        try:
-            if self.portal:
-                self.portal.set_color(display["color"])
-            if not config["govee"]["api_key"]:
-                return
-            client = GoveeClient(config["govee"]["api_key"])
-            outputs = combo.get("outputs", {})
-            split = (len(devices) + 1) // 2
-            errors = []
-            for index, device in enumerate(devices):
-                assigned_element = elements[0] if index < split else elements[1]
-                assigned_color = colors.get(assigned_element) or config["element_colors"][assigned_element]
-                output = outputs.get(device["device"], {})
-                try:
-                    if output.get("mode") in ("scene", "music") and output.get("capability"):
-                        client.set_capability(device, output["capability"])
-                    else:
-                        client.set_color(
-                            device, output.get("color") or assigned_color,
-                            int(output.get("brightness", config["govee"]["brightness"])),
-                        )
-                except Exception as exc:
-                    name = device.get("deviceName") or device.get("sku") or device["device"]
-                    log.exception("Govee combo output error for %s", name)
-                    errors.append(f"{name}: {exc}")
-            if errors:
-                self.state["last_error"] = "; ".join(errors)
-        except Exception as exc:
-            log.exception("Combo output error")
-            self.state["last_error"] = str(exc)
+        self.state.update({"figure": display, "figures": figures, "updated_at": time.time()})
+        if self.portal:
+            self.portal.set_color(display["color"])
+        outputs = combo.get("outputs", {})
+        split = (len(devices) + 1) // 2
+        resolved = {}
+        for index, device in enumerate(devices):
+            assigned = elements[0] if index < split else elements[1]
+            resolved[device["device"]] = dict(outputs.get(device["device"], {}))
+            resolved[device["device"]].setdefault("color", colors.get(assigned) or config["element_colors"][assigned])
+        self._activate_palette(f"{elements[0].title()} + {elements[1].title()}", display["color"], resolved, combo, "combo")
+
+    def handle_default(self):
+        config = self.store.data
+        profile = config.get("default_palette", {})
+        color = profile.get("color") or config["element_colors"]["default"]
+        if self.portal:
+            self.portal.set_color(color)
+        self.state.update({"figure": None, "figures": [], "updated_at": time.time()})
+        self._activate_palette("No Skylander", color, profile.get("outputs", {}), profile, "default")
 
     def handle_remove(self):
-        self.state.update({"figure": None, "updated_at": time.time()})
-        config = self.store.data
-        if config["behavior"]["on_remove"] == "color":
-            color = config["behavior"]["remove_color"]
-            try:
-                client = GoveeClient(config["govee"]["api_key"])
-                for device in config["govee"]["devices"]:
-                    client.set_color(device, color, int(config["govee"]["brightness"]))
-            except Exception as exc:
-                self.state["last_error"] = str(exc)
+        self.handle_default()

@@ -4,5 +4,5 @@
 <body class="login"><main class="login-card"><div class="portal-mark">◉</div><h1>SkyPortal Home</h1>
 <p>Enter the setup token printed by the installer.</p>
 {% if error %}<div class="notice error">{{ error }}</div>{% endif %}
-<form method="post"><label>Setup token<input name="token" type="password" autocomplete="current-password" autofocus required></label>
+<form method="post"><input type="hidden" name="next" value="{{ request.args.get('next', '') }}"><label>Setup token<input name="token" type="password" autocomplete="current-password" autofocus required></label>
 <button type="submit">Open controller</button></form></main></body></html>
