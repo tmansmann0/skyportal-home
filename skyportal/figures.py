@@ -7,6 +7,7 @@ from pathlib import Path
 
 
 ELEMENT_COLORS = {
+    "default": "#182B39",
     "air": "#D9F7FF",
     "earth": "#C58A3A",
     "fire": "#FF3B18",
@@ -51,6 +52,7 @@ def _load_database() -> list[dict]:
             "variant_id": _parse_id(record["variant_id"]),
             "name": record["name"],
             "element": ELEMENT_NAMES.get(int(record["element"]), "unknown"),
+            "kind": "power_up" if 200 <= _parse_id(record["char_id"]) <= 311 else "figure",
         }
         for record in records
     ]
@@ -75,6 +77,9 @@ FIGURES = {}
 for record in FIGURE_VARIANTS.values():
     FIGURES.setdefault(record["id"], record)
 
+POWER_UPS = {character_id: figure for character_id, figure in FIGURES.items() if figure["kind"] == "power_up"}
+CHARACTERS = {character_id: figure for character_id, figure in FIGURES.items() if figure["kind"] == "figure"}
+
 
 def identify(character_id: int, variant_id: int = 0) -> dict:
     exact = FIGURE_VARIANTS.get((character_id, variant_id))
@@ -83,6 +88,7 @@ def identify(character_id: int, variant_id: int = 0) -> dict:
         "id": character_id,
         "name": f"Unknown figure #{character_id}",
         "element": "unknown",
+        "kind": "figure",
     })
     result["variant_id"] = variant_id
     result["variant_known"] = exact is not None
@@ -91,8 +97,10 @@ def identify(character_id: int, variant_id: int = 0) -> dict:
 
 # A SWAP Force character is exposed as two tags. IDs 2000..2015 contain the
 # first name/top half and IDs 1000..1015 contain the second name/bottom half.
-# Element follows the first-name/top half, not the movement-type metadata that
-# some raw ID databases assign to individual halves.
+# Treat the halves as separate characters so a mixed SWAP activates the same
+# two-element behavior as two conventional figures. The source database's
+# element values for individual halves sometimes describe movement metadata,
+# so resolve both halves through the element of their original character.
 _SWAP_ELEMENTS = (
     "air", "air", "earth", "earth", "fire", "fire", "life", "life",
     "magic", "magic", "tech", "tech", "undead", "undead", "water", "water",
@@ -103,40 +111,36 @@ def _swap_name(figure: dict) -> str:
     return figure["name"].replace(" (SWAP)", "")
 
 
+def _normalize_swap_half(figure: dict) -> dict:
+    character_id = figure["id"]
+    if 2000 <= character_id <= 2015:
+        index = character_id - 2000
+        half = "top"
+    elif 1000 <= character_id <= 1015:
+        index = character_id - 1000
+        half = "bottom"
+    else:
+        return figure
+    result = dict(figure)
+    result.update({
+        "name": _swap_name(figure),
+        "element": _SWAP_ELEMENTS[index],
+        "swap_half": half,
+    })
+    return result
+
+
 def identify_present(identities: list[tuple[int, int]]) -> dict | None:
-    """Identify the displayed figure, combining a pair of SWAP Force tags."""
+    """Identify the first displayed character."""
     figures = identify_all_present(identities)
     return figures[0] if figures else None
 
 
 def identify_all_present(identities: list[tuple[int, int]]) -> list[dict]:
-    """Identify every figure, treating a SWAP Force pair as one character."""
+    """Identify every figure, treating each SWAP Force half as a character."""
     if not identities:
         return []
-
-    figures = [identify(character_id, variant_id) for character_id, variant_id in identities]
-    first = next((figure for figure in figures if 2000 <= figure["id"] <= 2015), None)
-    second = next((figure for figure in figures if 1000 <= figure["id"] <= 1015), None)
-    if not first or not second:
-        return figures
-
-    first_base = _swap_name(FIGURES[first["id"]])
-    second_base = _swap_name(FIGURES[second["id"]])
-    first_name = _swap_name(first)
-    second_name = _swap_name(second)
-    if first_name != first_base:
-        name = f"{first_name} {second_base}"
-    elif second_name != second_base:
-        name = f"{first_base} {second_name}"
-    else:
-        name = f"{first_base} {second_base}"
-
-    combined = {
-        "id": first["id"],
-        "variant_id": first["variant_id"],
-        "variant_known": first["variant_known"] and second["variant_known"],
-        "name": name,
-        "element": _SWAP_ELEMENTS[first["id"] - 2000],
-        "swap_parts": [first, second],
-    }
-    return [combined, *(figure for figure in figures if figure not in (first, second))]
+    return [
+        _normalize_swap_half(identify(character_id, variant_id))
+        for character_id, variant_id in identities
+    ]

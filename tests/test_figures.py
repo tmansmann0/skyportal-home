@@ -29,19 +29,33 @@ def test_unknown_figure_is_safe():
     assert figure["element"] == "unknown"
 
 
-def test_swap_force_halves_form_full_character():
-    figure = identify_present([(2004, 8192), (1004, 8192)])
-    assert figure["name"] == "Blast Zone"
-    assert figure["element"] == "fire"
-    assert len(figure["swap_parts"]) == 2
+def test_swap_force_halves_are_treated_as_two_characters():
+    figures = identify_all_present([(2004, 8192), (1004, 8192)])
+    assert [(figure["name"], figure["element"], figure["swap_half"]) for figure in figures] == [
+        ("Blast", "fire", "top"),
+        ("Zone", "fire", "bottom"),
+    ]
 
 
 def test_swap_force_variant_name_is_preserved():
-    figure = identify_present([(2015, 9218), (1015, 9218)])
-    assert figure["name"] == "Dark Wash Buckler"
-    assert figure["element"] == "water"
+    figures = identify_all_present([(2015, 9218), (1015, 9218)])
+    assert [figure["name"] for figure in figures] == ["Dark Wash", "Dark Buckler"]
+    assert [figure["element"] for figure in figures] == ["water", "water"]
 
 
-def test_multiple_figures_are_preserved_while_swap_halves_combine():
+def test_multiple_figures_are_preserved_with_both_swap_halves():
     figures = identify_all_present([(2004, 8192), (1004, 8192), (100, 4096)])
-    assert [figure["name"] for figure in figures] == ["Blast Zone", "Jet-Vac"]
+    assert [figure["name"] for figure in figures] == ["Blast", "Zone", "Jet-Vac"]
+
+
+def test_mixed_swap_uses_each_original_characters_element():
+    figures = identify_all_present([(2004, 8192), (1015, 8192)])
+    assert [(figure["name"], figure["element"]) for figure in figures] == [
+        ("Blast", "fire"), ("Buckler", "water"),
+    ]
+
+
+def test_magic_items_are_classified_as_power_ups():
+    assert identify(202, 0)["name"] == "Healing Elixir"
+    assert identify(202, 0)["kind"] == "power_up"
+    assert identify(100, 4096)["kind"] == "figure"

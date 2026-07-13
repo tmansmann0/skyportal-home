@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0 — 2026-07-12
+
+- Treat SWAP Force tops and bottoms as two current characters by default, with
+  mixed halves activating their corresponding advanced elemental combo
+- Add Home Assistant actions to every customizable palette, with optional
+  scene-only behavior
+- Add a fully customizable No Skylander default palette
+- Add durable portal and configuration activity history
+- Recommend advanced combos from the figures currently on the portal
+- Replace legacy figure overrides with searchable Figure Palettes and current
+  or recently used recommendations
+- Add equivalent Power Up Palettes for magic items and adventure pieces
+
 ## 1.2.0 — 2026-07-12
 
 - Add per-element, per-light color and brightness profiles

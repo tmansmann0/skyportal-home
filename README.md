@@ -18,6 +18,9 @@ Designed for Raspberry Pi Zero 2 W and Raspberry Pi OS Bookworm (64-bit or 32-bi
 - Per-element light profiles with individual colors, brightness, scenes, and
   music modes when supported by each Govee device
 - Multi-figure element combinations with automatic even light splitting
+- Searchable character and power-up palettes with current/recent recommendations
+- Optional Home Assistant scenes on every palette, plus an empty-portal default
+- Durable recent activity history
 - Password-protected local setup UI on port `8099`
 - Automatic startup and portal reconnection through systemd
 - Local-only secret storage with `0600` permissions
