@@ -312,7 +312,7 @@ function renderLibraryRecommendation(kind, currentIds, recentIds) {
   const ids = [...new Set([...currentIds, ...recentIds])].filter(id => catalog[id]).slice(0, 8);
   box.classList.toggle('hidden', !ids.length);
   if (!ids.length) return;
-  box.innerHTML = `<span><strong>${currentIds.length ? 'On portal now' : 'Recently used'}</strong></span><div class="recommendation-chips"></div>`;
+  box.innerHTML = `<span><strong>${currentIds.length ? 'On portal recently' : 'Recently used'}</strong></span><div class="recommendation-chips"></div>`;
   const chips = box.querySelector('.recommendation-chips');
   ids.forEach(id => {
     const button = document.createElement('button');
