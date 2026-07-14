@@ -32,7 +32,9 @@ function individualDevices() {
 }
 
 function dreamViewTargets() {
-  return [...selected.values()].filter(device => device.sku === 'DreamViewScenic' || capability(device, 'dreamViewToggle'));
+  const devices = [...selected.values()];
+  const groups = devices.filter(device => device.sku === 'DreamViewScenic');
+  return groups.length ? groups : devices.filter(device => capability(device, 'dreamViewToggle'));
 }
 
 function namedCollection(kind) {
@@ -128,7 +130,7 @@ function renderPaletteAutomation() {
         return;
       }
       if (!targets.some(device => String(device.device) === String(action.dreamview_device))) action.dreamview_device = targets[0].device;
-      panel.innerHTML = `<label>DreamView group<select id="paletteDreamView">${targets.map(device => `<option value="${escapeHtml(device.device)}" ${String(device.device) === String(action.dreamview_device) ? 'selected' : ''}>${escapeHtml(device.deviceName || 'DreamView')}</option>`).join('')}</select></label><span>Only this saved Govee DreamView group will run; individual light controls are ignored.</span>`;
+      panel.innerHTML = `<label>DreamView group<select id="paletteDreamView">${targets.map(device => `<option value="${escapeHtml(device.device)}" ${String(device.device) === String(action.dreamview_device) ? 'selected' : ''}>${escapeHtml(device.deviceName || 'DreamView')} — DreamView group</option>`).join('')}</select></label><span>Only this saved Govee DreamView group will run; individual light controls are ignored.</span>`;
       $('#paletteDreamView').onchange = event => { action.dreamview_device = event.target.value; };
     }
   };

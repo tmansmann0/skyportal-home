@@ -34,6 +34,8 @@ $('#discover').onclick = async () => {
     const response = await fetch('/api/govee/discover', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({api_key:$('#goveeKey').value})});
     const payload = await response.json();
     if (!payload.ok) throw Error(payload.error);
+    const renamed = payload.devices.filter(device => selected.has(device.device)
+      && selected.get(device.device).deviceName !== device.deviceName).length;
     discovered = payload.devices;
     discovered.forEach(device => { if (selected.has(device.device)) selected.set(device.device, device); });
     renderDevices();
@@ -41,7 +43,8 @@ $('#discover').onclick = async () => {
     const sceneNote = !payload.scene_devices ? '' : payload.scenes_refreshed === payload.scene_devices
       ? ' Scene lists refreshed.'
       : ` Refreshed scenes for ${payload.scenes_refreshed || 0} light${payload.scenes_refreshed === 1 ? '' : 's'}.`;
-    notice(`Found ${payload.devices.length} compatible device${payload.devices.length === 1 ? '' : 's'}.${sceneNote}`);
+    const nameNote = renamed ? ` Refreshed ${renamed} selected device name${renamed === 1 ? '' : 's'}; save to keep ${renamed === 1 ? 'it' : 'them'}.` : '';
+    notice(`Found ${payload.devices.length} compatible device${payload.devices.length === 1 ? '' : 's'}.${sceneNote}${nameNote}`);
   } catch (error) { notice(error.message, true); }
 };
 $('#save').onclick = async () => {

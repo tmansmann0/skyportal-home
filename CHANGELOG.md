@@ -10,6 +10,8 @@
   Govee controls, a Home Assistant scene, or DreamView
 - Discover saved Scenic DreamView groups and activate one as a palette-wide
   alternative to individual light controls
+- Refresh renamed DreamView groups during device discovery and fully hide
+  individual light controls outside Govee mode
 
 ## 1.3.0 — 2026-07-12
 
