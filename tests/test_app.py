@@ -64,6 +64,9 @@ def test_discovery_includes_dreamview_only_devices(tmp_path, monkeypatch):
 
         def discover(self):
             return [
+                {"device": "group", "sku": "DreamViewScenic", "capabilities": [{
+                    "type": "devices.capabilities.on_off", "instance": "powerSwitch",
+                }]},
                 {"device": "dream", "sku": "H1", "capabilities": [{
                     "type": "devices.capabilities.toggle", "instance": "dreamViewToggle",
                 }]},
@@ -82,4 +85,6 @@ def test_discovery_includes_dreamview_only_devices(tmp_path, monkeypatch):
     response = web.post("/api/govee/discover", json={})
 
     assert response.status_code == 200
-    assert [device["device"] for device in response.get_json()["devices"]] == ["dream", "light"]
+    payload = response.get_json()
+    assert [device["device"] for device in payload["devices"]] == ["group", "dream", "light"]
+    assert payload["scene_devices"] == 0

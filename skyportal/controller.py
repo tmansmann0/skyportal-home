@@ -7,6 +7,7 @@ from .outputs import GoveeClient, HomeAssistantClient
 from .portal import Portal
 
 log = logging.getLogger(__name__)
+VIRTUAL_GROUP_SKUS = {"DreamViewScenic", "BaseGroup", "SameModeGroup"}
 
 
 class Controller:
@@ -84,20 +85,32 @@ class Controller:
         if scene and ha["url"] and ha["token"]:
             HomeAssistantClient(ha["url"], ha["token"]).activate_scene(scene)
 
-    def _apply_outputs(self, base_color: str, outputs: dict, lights_enabled: bool = True):
+    def _individual_devices(self):
+        return [
+            device for device in self.store.data["govee"]["devices"]
+            if device.get("sku") not in VIRTUAL_GROUP_SKUS
+        ]
+
+    def _dreamview_targets(self):
+        return [
+            device for device in self.store.data["govee"]["devices"]
+            if device.get("sku") == "DreamViewScenic" or any(
+                capability.get("instance") == "dreamViewToggle"
+                for capability in device.get("capabilities", [])
+            )
+        ]
+
+    def _apply_outputs(self, base_color: str, outputs: dict):
         config = self.store.data
-        if not lights_enabled or not config["govee"]["api_key"]:
+        if not config["govee"]["api_key"]:
             return []
         client = GoveeClient(config["govee"]["api_key"])
         errors = []
-        for device in config["govee"]["devices"]:
+        for device in self._individual_devices():
             try:
                 output = outputs.get(device["device"], {})
-                if output.get("mode") in ("scene", "music", "dreamview") and output.get("capability"):
-                    client.set_capability(
-                        device, output["capability"],
-                        power_on=output.get("mode") != "dreamview",
-                    )
+                if output.get("mode") in ("scene", "music") and output.get("capability"):
+                    client.set_capability(device, output["capability"])
                 else:
                     client.set_color(
                         device, output.get("color") or base_color,
@@ -109,16 +122,57 @@ class Controller:
                 errors.append(f"{name}: {exc}")
         return errors
 
+    def _activate_dreamview(self, device_id: str):
+        config = self.store.data
+        if not config["govee"]["api_key"]:
+            return ["Configure a Govee API key first."], ""
+        targets = self._dreamview_targets()
+        target = next((device for device in targets if str(device.get("device")) == str(device_id)), None)
+        if not target:
+            return ["Select an available DreamView group."], ""
+        if target.get("sku") == "DreamViewScenic":
+            toggle = next((
+                capability for capability in target.get("capabilities", [])
+                if capability.get("instance") == "powerSwitch"
+            ), {
+                "type": "devices.capabilities.on_off", "instance": "powerSwitch",
+                "parameters": {"dataType": "ENUM", "options": []},
+            })
+        else:
+            toggle = next(
+                capability for capability in target.get("capabilities", [])
+                if capability.get("instance") == "dreamViewToggle"
+            )
+        capability = {
+            "type": toggle["type"], "instance": toggle["instance"], "value": 1,
+        }
+        try:
+            GoveeClient(config["govee"]["api_key"]).set_capability(target, capability, power_on=False)
+            return [], target.get("deviceName") or "DreamView"
+        except Exception as exc:
+            log.exception("DreamView output error")
+            return [f"DreamView: {exc}"], target.get("deviceName") or "DreamView"
+
     def _activate_palette(self, label: str, color: str, outputs: dict, action: dict, event="palette"):
         errors = []
-        try:
-            self._activate_ha(action.get("ha_scene", ""))
-        except Exception as exc:
-            log.exception("Home Assistant output error")
-            errors.append(f"Home Assistant: {exc}")
-        errors.extend(self._apply_outputs(color, outputs, action.get("lights_enabled", True)))
+        mode = action.get("action_mode")
+        if not mode:
+            mode = "home_assistant" if action.get("lights_enabled") is False else "govee"
+        detail = ""
+        if mode == "home_assistant":
+            detail = action.get("ha_scene", "")
+            try:
+                self._activate_ha(detail)
+            except Exception as exc:
+                log.exception("Home Assistant output error")
+                errors.append(f"Home Assistant: {exc}")
+        elif mode == "dreamview":
+            dreamview_errors, detail = self._activate_dreamview(action.get("dreamview_device", ""))
+            errors.extend(dreamview_errors)
+        else:
+            errors.extend(self._apply_outputs(color, outputs))
         self.state["last_error"] = "; ".join(errors) if errors else None
-        self._record(event, label, action.get("ha_scene", ""))
+        self._record(event, label, detail)
 
     def handle_figure(self, character_id: int, variant_id: int = 0, figure=None):
         figure = dict(figure or identify(character_id, variant_id))
@@ -157,7 +211,7 @@ class Controller:
             self.state["figures"] = figures
             return
         config = self.store.data
-        devices = config["govee"]["devices"]
+        devices = self._individual_devices()
         distinct_elements = []
         for figure in figures:
             if figure["element"] not in distinct_elements:

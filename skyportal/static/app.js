@@ -27,6 +27,14 @@ function capability(device, instance) {
   return (device.capabilities || []).find(item => item.instance === instance);
 }
 
+function individualDevices() {
+  return [...selected.values()].filter(device => !['DreamViewScenic', 'BaseGroup', 'SameModeGroup'].includes(device.sku));
+}
+
+function dreamViewTargets() {
+  return [...selected.values()].filter(device => device.sku === 'DreamViewScenic' || capability(device, 'dreamViewToggle'));
+}
+
 function namedCollection(kind) {
   return kind === 'figure' ? figurePalettes : powerupPalettes;
 }
@@ -40,7 +48,7 @@ function addNamedPalette(kind, id) {
   const figure = catalog[id];
   if (!figure) return;
   const collection = namedCollection(kind);
-  collection[id] ||= {color: elementColor(figure.element), outputs: {}, lights_enabled: true, ha_scene: ''};
+  collection[id] ||= {color: elementColor(figure.element), outputs: {}, action_mode: 'govee', ha_scene: ''};
   renderNamedPalettes(kind);
 }
 
@@ -72,7 +80,7 @@ function activeColor(deviceIndex = 0) {
   if (activeElement === 'default') return defaultPalette.color || elementColor('default');
   if (!activeComboKey) return elementColor(activeElement);
   const combo = elementCombos[activeComboKey];
-  const split = Math.ceil(selected.size / 2);
+  const split = Math.ceil(individualDevices().length / 2);
   const element = combo.elements[deviceIndex < split ? 0 : 1];
   return combo.colors[element] || elementColor(element);
 }
@@ -99,12 +107,36 @@ function activeAction() {
 
 function renderPaletteAutomation() {
   const action = activeAction();
-  if (action.lights_enabled === undefined) action.lights_enabled = true;
+  action.action_mode ||= action.lights_enabled === false ? 'home_assistant' : 'govee';
   const box = $('#paletteAutomation');
-  box.innerHTML = `<label class="check-label"><input id="paletteLights" type="checkbox" ${action.lights_enabled ? 'checked' : ''}> Change Govee lights</label><label>Home Assistant scene<input id="paletteHaScene" placeholder="scene.portal_action" value="${escapeHtml(action.ha_scene || '')}"></label><small>Disable Govee lights to trigger only the Home Assistant scene.</small>`;
-  $('#paletteLights').onchange = event => { action.lights_enabled = event.target.checked; $('#customizeDevices').classList.toggle('disabled-profiles', !event.target.checked); };
-  $('#paletteHaScene').oninput = event => { action.ha_scene = event.target.value.trim(); };
-  $('#customizeDevices').classList.toggle('disabled-profiles', !action.lights_enabled);
+  box.innerHTML = `<div class="output-mode-tabs"><button type="button" data-mode="govee">Govee</button><button type="button" data-mode="home_assistant">Home Assistant</button><button type="button" data-mode="dreamview">DreamView</button></div><div id="outputModePanel" class="output-mode-panel"></div>`;
+  const renderMode = () => {
+    box.querySelectorAll('.output-mode-tabs button').forEach(button => button.classList.toggle('active', button.dataset.mode === action.action_mode));
+    const panel = $('#outputModePanel');
+    const devices = $('#customizeDevices');
+    devices.classList.toggle('hidden', action.action_mode !== 'govee');
+    if (action.action_mode === 'govee') {
+      panel.innerHTML = '<strong>Individual Govee controls</strong><span>Each selected light uses its customized color, brightness, scene, or music mode.</span>';
+      renderCustomizeDevices();
+    } else if (action.action_mode === 'home_assistant') {
+      panel.innerHTML = `<label>Home Assistant scene<input id="paletteHaScene" placeholder="scene.portal_action" value="${escapeHtml(action.ha_scene || '')}"></label><span>Only this Home Assistant scene will run.</span>`;
+      $('#paletteHaScene').oninput = event => { action.ha_scene = event.target.value.trim(); };
+    } else {
+      const targets = dreamViewTargets();
+      if (!targets.length) {
+        panel.innerHTML = '<strong>No DreamView groups selected</strong><span>Open Settings, discover devices, and select a Scenic DreamView group first.</span>';
+        return;
+      }
+      if (!targets.some(device => String(device.device) === String(action.dreamview_device))) action.dreamview_device = targets[0].device;
+      panel.innerHTML = `<label>DreamView group<select id="paletteDreamView">${targets.map(device => `<option value="${escapeHtml(device.device)}" ${String(device.device) === String(action.dreamview_device) ? 'selected' : ''}>${escapeHtml(device.deviceName || 'DreamView')}</option>`).join('')}</select></label><span>Only this saved Govee DreamView group will run; individual light controls are ignored.</span>`;
+      $('#paletteDreamView').onchange = event => { action.dreamview_device = event.target.value; };
+    }
+  };
+  box.querySelectorAll('.output-mode-tabs button').forEach(button => button.onclick = () => {
+    action.action_mode = button.dataset.mode;
+    renderMode();
+  });
+  renderMode();
 }
 
 function musicValue(device, profile) {
@@ -166,24 +198,23 @@ async function refreshSceneCache(force = true) {
 
 function renderCustomizeDevices() {
   const box = $('#customizeDevices');
+  const devices = individualDevices();
   box.innerHTML = '';
-  if (!selected.size) {
-    box.innerHTML = '<div class="empty-state">Select at least one Govee device first.</div>';
+  if (!devices.length) {
+    box.innerHTML = '<div class="empty-state">Select at least one individual Govee light first.</div>';
     return;
   }
-  [...selected.values()].forEach((device, deviceIndex) => {
+  devices.forEach((device, deviceIndex) => {
     const profile = profileFor(device, deviceIndex);
     const supportsColor = !!capability(device, 'colorRgb');
     const supportsScene = !!(capability(device, 'lightScene') || capability(device, 'diyScene'));
     const music = capability(device, 'musicMode');
-    const dreamView = capability(device, 'dreamViewToggle');
     const card = document.createElement('article');
     card.className = 'light-profile';
     const modes = [];
     if (supportsColor) modes.push('<option value="color">Individual color</option>');
     if (supportsScene) modes.push('<option value="scene">Govee scene</option>');
     if (music) modes.push('<option value="music">Music mode</option>');
-    if (dreamView) modes.push('<option value="dreamview">DreamView</option>');
     if (!modes.length) modes.push('<option value="color">Individual color</option>');
     card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(device.sku)}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
     const mode = card.querySelector('.profile-mode');
@@ -221,9 +252,6 @@ function renderCustomizeDevices() {
           updateMusic();
         });
         updateMusic();
-      } else {
-        controls.innerHTML = '<div class="dreamview-note"><strong>DreamView</strong><span>Turns on the DreamView setup already configured for this device in Govee Home.</span></div>';
-        profile.capability = {type: dreamView.type, instance: dreamView.instance, value: 1};
       }
     };
     mode.onchange = renderControls;
@@ -239,7 +267,6 @@ async function openCustomize(element) {
   $('#customizeTitle').textContent = element === 'default' ? 'Customize No Skylander' : `Customize ${element[0].toUpperCase()}${element.slice(1)}`;
   await save(false);
   renderPaletteAutomation();
-  renderCustomizeDevices();
   $('#customizeDialog').showModal();
 }
 
@@ -251,7 +278,6 @@ async function openComboCustomize(key) {
   $('#customizeTitle').textContent = `Customize ${combo.elements.map(element => element[0].toUpperCase() + element.slice(1)).join(' + ')}`;
   await save(false);
   renderPaletteAutomation();
-  renderCustomizeDevices();
   $('#customizeDialog').showModal();
 }
 
@@ -262,7 +288,6 @@ async function openNamedCustomize(kind, id) {
   $('#customizeTitle').textContent = `Customize ${namedCatalog(kind)[id].name}`;
   await save(false);
   renderPaletteAutomation();
-  renderCustomizeDevices();
   $('#customizeDialog').showModal();
 }
 

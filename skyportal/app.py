@@ -114,25 +114,25 @@ def create_app(store=None, start_controller=True):
         try:
             client = GoveeClient(key)
             devices = client.discover()
-            lights = [d for d in devices if any(
+            lights = [d for d in devices if d.get("sku") == "DreamViewScenic" or any(
                 c.get("instance") in ("colorRgb", "dreamViewToggle")
                 for c in d.get("capabilities", [])
             )]
             scene_errors = []
             refreshed = 0
-            for device in lights:
-                if not any(
-                    capability.get("instance") in ("lightScene", "diyScene")
-                    for capability in device.get("capabilities", [])
-                ):
-                    continue
+            scene_devices = [device for device in lights if any(
+                capability.get("instance") in ("lightScene", "diyScene")
+                for capability in device.get("capabilities", [])
+            )]
+            for device in scene_devices:
                 try:
                     scene_cache.get(client, device, force=True)
                     refreshed += 1
                 except Exception as exc:
                     scene_errors.append(f"{device.get('deviceName') or device.get('sku')}: {exc}")
             return jsonify({
-                "ok": True, "devices": lights, "scenes_refreshed": refreshed,
+                "ok": True, "devices": lights, "scene_devices": len(scene_devices),
+                "scenes_refreshed": refreshed,
                 "scene_errors": scene_errors,
             })
         except Exception as exc:

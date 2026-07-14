@@ -93,33 +93,66 @@ def test_combo_profile_controls_individual_brightness(monkeypatch):
     assert FakeGovee.calls == [("left", "#AAAAAA", 75), ("right", "#123456", 22)]
 
 
-def test_dreamview_profile_uses_advertised_toggle_capability(monkeypatch):
+def test_dreamview_palette_activates_saved_group_instead_of_lights(monkeypatch):
     monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
     FakeGovee.calls = []
-    device = {"device": "sync-center", "deviceName": "DreamView"}
-    store = Store([device])
-    store.data["element_outputs"] = {"air": {"sync-center": {
-        "mode": "dreamview",
-        "capability": {
-            "type": "devices.capabilities.toggle",
-            "instance": "dreamViewToggle",
-            "value": 1,
-        },
-    }}}
+    light = {"device": "light", "deviceName": "Desk light", "sku": "H1"}
+    group = {
+        "device": "dream-group", "deviceName": "Scenic DreamView",
+        "sku": "DreamViewScenic", "capabilities": [{
+            "type": "devices.capabilities.on_off", "instance": "powerSwitch",
+        }],
+    }
+    store = Store([light, group])
+    store.data["element_actions"] = {"air": {
+        "action_mode": "dreamview", "dreamview_device": "dream-group",
+    }}
 
     Controller(store).handle_figure(1, figure=figures()[0])
 
-    assert FakeGovee.calls == [("sync-center", {
-        "type": "devices.capabilities.toggle",
-        "instance": "dreamViewToggle",
+    assert FakeGovee.calls == [("dream-group", {
+        "type": "devices.capabilities.on_off",
+        "instance": "powerSwitch",
         "value": 1,
     }, False)]
+
+
+def test_govee_mode_does_not_also_activate_home_assistant(monkeypatch):
+    monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
+    monkeypatch.setattr(controller_module, "HomeAssistantClient", FakeHomeAssistant)
+    FakeGovee.calls = []
+    FakeHomeAssistant.calls = []
+    store = Store([{"device": "only", "sku": "H1"}])
+    store.data["home_assistant"] = {"url": "http://ha", "token": "token"}
+    store.data["element_actions"] = {"air": {
+        "action_mode": "govee", "ha_scene": "scene.should_not_run",
+    }}
+
+    Controller(store).handle_figure(1, figure=figures()[0])
+
+    assert FakeGovee.calls == [("only", "#AAAAAA", 75)]
+    assert FakeHomeAssistant.calls == []
 
 
 def test_single_light_uses_standard_behavior(monkeypatch):
     monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
     FakeGovee.calls = []
     controller = Controller(Store([{"device": "only"}]))
+
+    controller.handle_figures(figures())
+
+    assert FakeGovee.calls == [("only", "#AAAAAA", 75)]
+    assert "combo" not in controller.state["figure"]
+
+
+def test_dreamview_group_does_not_enable_two_light_combo(monkeypatch):
+    monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
+    FakeGovee.calls = []
+    devices = [
+        {"device": "only", "sku": "H1"},
+        {"device": "group", "sku": "DreamViewScenic"},
+    ]
+    controller = Controller(Store(devices))
 
     controller.handle_figures(figures())
 

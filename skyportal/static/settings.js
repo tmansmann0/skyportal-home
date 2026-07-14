@@ -12,7 +12,8 @@ function renderDevices() {
   discovered.forEach(device => {
     const row = document.createElement('label');
     row.className = 'device';
-    row.innerHTML = `<input type="checkbox" ${selected.has(device.device) ? 'checked' : ''}><span><strong>${escapeHtml(device.deviceName || device.sku)}</strong><br><small>${escapeHtml(device.sku)} · ${escapeHtml(device.device)}</small></span>`;
+    const descriptor = device.sku === 'DreamViewScenic' ? 'DreamView group' : device.sku;
+    row.innerHTML = `<input type="checkbox" ${selected.has(device.device) ? 'checked' : ''}><span><strong>${escapeHtml(device.deviceName || device.sku)}</strong><br><small>${escapeHtml(descriptor)} · ${escapeHtml(device.device)}</small></span>`;
     row.querySelector('input').onchange = event => event.target.checked ? selected.set(device.device, device) : selected.delete(device.device);
     box.append(row);
   });
@@ -37,7 +38,7 @@ $('#discover').onclick = async () => {
     discovered.forEach(device => { if (selected.has(device.device)) selected.set(device.device, device); });
     renderDevices();
     localStorage.setItem('skyportal-scenes-refresh', String(Date.now()));
-    const sceneNote = payload.scenes_refreshed === payload.devices.length
+    const sceneNote = !payload.scene_devices ? '' : payload.scenes_refreshed === payload.scene_devices
       ? ' Scene lists refreshed.'
       : ` Refreshed scenes for ${payload.scenes_refreshed || 0} light${payload.scenes_refreshed === 1 ? '' : 's'}.`;
     notice(`Found ${payload.devices.length} compatible device${payload.devices.length === 1 ? '' : 's'}.${sceneNote}`);
