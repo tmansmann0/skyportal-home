@@ -12,6 +12,8 @@
   alternative to individual light controls
 - Refresh renamed DreamView groups during device discovery and fully hide
   individual light controls outside Govee mode
+- Explicitly stop active DreamView groups before applying every subsequent
+  Govee, Home Assistant, or DreamView palette
 
 ## 1.3.0 — 2026-07-12
 

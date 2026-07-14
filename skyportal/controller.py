@@ -100,6 +100,37 @@ class Controller:
             )
         ]
 
+    @staticmethod
+    def _dreamview_capability(target: dict, value: int):
+        instance = "powerSwitch" if target.get("sku") == "DreamViewScenic" else "dreamViewToggle"
+        advertised = next((
+            capability for capability in target.get("capabilities", [])
+            if capability.get("instance") == instance
+        ), None)
+        return {
+            "type": advertised.get("type") if advertised else "devices.capabilities.on_off",
+            "instance": instance,
+            "value": value,
+        }
+
+    def _deactivate_dreamviews(self):
+        config = self.store.data
+        targets = self._dreamview_targets()
+        if not config["govee"]["api_key"] or not targets:
+            return []
+        client = GoveeClient(config["govee"]["api_key"])
+        errors = []
+        for target in targets:
+            try:
+                client.set_capability(
+                    target, self._dreamview_capability(target, 0), power_on=False,
+                )
+            except Exception as exc:
+                name = target.get("deviceName") or "DreamView"
+                log.exception("Could not deactivate DreamView %s", name)
+                errors.append(f"{name} off: {exc}")
+        return errors
+
     def _apply_outputs(self, base_color: str, outputs: dict):
         config = self.store.data
         if not config["govee"]["api_key"]:
@@ -130,31 +161,19 @@ class Controller:
         target = next((device for device in targets if str(device.get("device")) == str(device_id)), None)
         if not target:
             return ["Select an available DreamView group."], ""
-        if target.get("sku") == "DreamViewScenic":
-            toggle = next((
-                capability for capability in target.get("capabilities", [])
-                if capability.get("instance") == "powerSwitch"
-            ), {
-                "type": "devices.capabilities.on_off", "instance": "powerSwitch",
-                "parameters": {"dataType": "ENUM", "options": []},
-            })
-        else:
-            toggle = next(
-                capability for capability in target.get("capabilities", [])
-                if capability.get("instance") == "dreamViewToggle"
-            )
-        capability = {
-            "type": toggle["type"], "instance": toggle["instance"], "value": 1,
-        }
         try:
-            GoveeClient(config["govee"]["api_key"]).set_capability(target, capability, power_on=False)
+            GoveeClient(config["govee"]["api_key"]).set_capability(
+                target, self._dreamview_capability(target, 1), power_on=False,
+            )
             return [], target.get("deviceName") or "DreamView"
         except Exception as exc:
             log.exception("DreamView output error")
             return [f"DreamView: {exc}"], target.get("deviceName") or "DreamView"
 
     def _activate_palette(self, label: str, color: str, outputs: dict, action: dict, event="palette"):
-        errors = []
+        # DreamView remains authoritative until explicitly stopped. Always turn
+        # saved groups off first so the next exclusive output starts cleanly.
+        errors = self._deactivate_dreamviews()
         mode = action.get("action_mode")
         if not mode:
             mode = "home_assistant" if action.get("lights_enabled") is False else "govee"

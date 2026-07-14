@@ -110,11 +110,18 @@ def test_dreamview_palette_activates_saved_group_instead_of_lights(monkeypatch):
 
     Controller(store).handle_figure(1, figure=figures()[0])
 
-    assert FakeGovee.calls == [("dream-group", {
-        "type": "devices.capabilities.on_off",
-        "instance": "powerSwitch",
-        "value": 1,
-    }, False)]
+    assert FakeGovee.calls == [
+        ("dream-group", {
+            "type": "devices.capabilities.on_off",
+            "instance": "powerSwitch",
+            "value": 0,
+        }, False),
+        ("dream-group", {
+            "type": "devices.capabilities.on_off",
+            "instance": "powerSwitch",
+            "value": 1,
+        }, False),
+    ]
 
 
 def test_govee_mode_does_not_also_activate_home_assistant(monkeypatch):
@@ -145,6 +152,28 @@ def test_single_light_uses_standard_behavior(monkeypatch):
     assert "combo" not in controller.state["figure"]
 
 
+def test_home_assistant_mode_stops_dreamview_first(monkeypatch):
+    monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
+    monkeypatch.setattr(controller_module, "HomeAssistantClient", FakeHomeAssistant)
+    FakeGovee.calls = []
+    FakeHomeAssistant.calls = []
+    group = {"device": "group", "sku": "DreamViewScenic", "deviceName": "Bonfire"}
+    store = Store([group])
+    store.data["home_assistant"] = {"url": "http://ha", "token": "token"}
+    store.data["element_actions"] = {"air": {
+        "action_mode": "home_assistant", "ha_scene": "scene.portal",
+    }}
+
+    Controller(store).handle_figure(1, figure=figures()[0])
+
+    assert FakeGovee.calls == [("group", {
+        "type": "devices.capabilities.on_off",
+        "instance": "powerSwitch",
+        "value": 0,
+    }, False)]
+    assert FakeHomeAssistant.calls == ["scene.portal"]
+
+
 def test_dreamview_group_does_not_enable_two_light_combo(monkeypatch):
     monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
     FakeGovee.calls = []
@@ -156,7 +185,14 @@ def test_dreamview_group_does_not_enable_two_light_combo(monkeypatch):
 
     controller.handle_figures(figures())
 
-    assert FakeGovee.calls == [("only", "#AAAAAA", 75)]
+    assert FakeGovee.calls == [
+        ("group", {
+            "type": "devices.capabilities.on_off",
+            "instance": "powerSwitch",
+            "value": 0,
+        }, False),
+        ("only", "#AAAAAA", 75),
+    ]
     assert "combo" not in controller.state["figure"]
 
 
