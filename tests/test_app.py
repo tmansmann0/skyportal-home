@@ -29,6 +29,7 @@ def test_settings_are_on_a_separate_authenticated_page(tmp_path):
     dashboard = web.get("/")
     assert b'href="/settings"' in dashboard.data
     assert b'id="goveeKey"' not in dashboard.data
+    assert b'id="previewCustomize"' in dashboard.data
 
 
 def test_login_next_rejects_external_redirect(tmp_path):
@@ -38,3 +39,18 @@ def test_login_next_rejects_external_redirect(tmp_path):
         data={"token": store.data["setup_token"], "next": "//example.com"},
     )
     assert response.headers["Location"] == "/"
+
+
+def test_palette_preview_endpoints(tmp_path):
+    web, store = client(tmp_path)
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/test/fire")
+    assert response.get_json()["ok"]
+
+    response = web.post("/api/test-figure/figure/0")
+    assert response.get_json()["ok"]
+
+    response = web.post("/api/test-figure/not-a-kind/0")
+    assert response.status_code == 404

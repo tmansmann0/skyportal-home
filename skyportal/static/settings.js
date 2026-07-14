@@ -34,8 +34,13 @@ $('#discover').onclick = async () => {
     const payload = await response.json();
     if (!payload.ok) throw Error(payload.error);
     discovered = payload.devices;
+    discovered.forEach(device => { if (selected.has(device.device)) selected.set(device.device, device); });
     renderDevices();
-    notice(`Found ${payload.devices.length} compatible light${payload.devices.length === 1 ? '' : 's'}.`);
+    localStorage.setItem('skyportal-scenes-refresh', String(Date.now()));
+    const sceneNote = payload.scenes_refreshed === payload.devices.length
+      ? ' Scene lists refreshed.'
+      : ` Refreshed scenes for ${payload.scenes_refreshed || 0} light${payload.scenes_refreshed === 1 ? '' : 's'}.`;
+    notice(`Found ${payload.devices.length} compatible light${payload.devices.length === 1 ? '' : 's'}.${sceneNote}`);
   } catch (error) { notice(error.message, true); }
 };
 $('#save').onclick = async () => {

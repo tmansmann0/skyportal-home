@@ -195,5 +195,21 @@ class Controller:
         self.state.update({"figure": None, "figures": [], "updated_at": time.time()})
         self._activate_palette("No Skylander", color, profile.get("outputs", {}), profile, "default")
 
+    def preview_element(self, element: str):
+        config = self.store.data
+        color = config["element_colors"].get(element, config["element_colors"].get("unknown", "#708090"))
+        preview = {
+            "id": -1, "variant_id": 0, "name": f"{element.title()} preview",
+            "element": element, "color": color, "preview": True,
+        }
+        self.state.update({"figure": preview, "figures": [], "updated_at": time.time()})
+        if self.portal:
+            self.portal.set_color(color)
+        self._activate_palette(
+            f"{element.title()} preview", color,
+            config.get("element_outputs", {}).get(element, {}),
+            config.get("element_actions", {}).get(element, {}), "preview",
+        )
+
     def handle_remove(self):
         self.handle_default()

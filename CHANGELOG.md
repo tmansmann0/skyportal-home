@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.4.0 — 2026-07-13
+
+- Add an in-dialog preview action for every customizable palette
+- Refresh Govee scene and DIY-scene compatibility once per new dashboard tab
+  session, without periodic API polling
+- Refresh scene compatibility immediately during Govee device discovery
+
 ## 1.3.0 — 2026-07-12
 
 - Treat SWAP Force tops and bottoms as two current characters by default, with

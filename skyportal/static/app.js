@@ -11,6 +11,7 @@ let activeComboKey = null;
 let activeNamed = null;
 let currentState = {figures: [], recent_figures: config.recent_figures || [], recent_powerups: config.recent_powerups || [], history: config.history || []};
 const sceneCache = new Map();
+let sceneRefreshInFlight = false;
 let savedSignature = null;
 
 const $ = selector => document.querySelector(selector);
@@ -142,6 +143,23 @@ async function loadScenes(device, select, profile) {
     select.onchange = () => { profile.capability = scenes[+select.value].capability; };
   } catch (error) {
     select.innerHTML = `<option>${escapeHtml(error.message)}</option>`;
+  }
+}
+
+async function refreshSceneCache(force = true) {
+  if (sceneRefreshInFlight || !selected.size) return;
+  sceneRefreshInFlight = true;
+  try {
+    for (const device of selected.values()) {
+      const response = await fetch('/api/govee/scenes', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({device: device.device, refresh: force}),
+      });
+      const payload = await response.json();
+      if (payload.ok) sceneCache.set(device.device, payload.scenes);
+    }
+  } finally {
+    sceneRefreshInFlight = false;
   }
 }
 
@@ -367,6 +385,33 @@ document.querySelectorAll('.test').forEach(button => button.onclick = async () =
 });
 $('#closeCustomize').onclick = () => $('#customizeDialog').close();
 $('#doneCustomize').onclick = () => $('#customizeDialog').close();
+$('#previewCustomize').onclick = async () => {
+  const status = $('#previewStatus');
+  const button = $('#previewCustomize');
+  button.disabled = true;
+  status.textContent = 'Applying…';
+  try {
+    await save(false);
+    let response;
+    if (activeNamed) {
+      response = await fetch(`/api/test-figure/${activeNamed.kind}/${activeNamed.id}`, {method: 'POST'});
+    } else if (activeComboKey) {
+      response = await fetch('/api/test-combo', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({elements: elementCombos[activeComboKey].elements}),
+      });
+    } else {
+      response = await fetch(`/api/test/${activeElement}`, {method: 'POST'});
+    }
+    const payload = await response.json();
+    if (!payload.ok) throw Error(payload.error || 'Preview failed');
+    status.textContent = 'Preview applied';
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+};
 $('#customizeDialog').onclick = event => { if (event.target === $('#customizeDialog')) $('#customizeDialog').close(); };
 
 function settingsBody() {
@@ -420,3 +465,14 @@ renderHistory();
 savedSignature = settingsSignature();
 updateSaveVisibility();
 setInterval(updateSaveVisibility, 250);
+const sceneSessionKey = 'skyportal-scenes-session-refreshed';
+if (!sessionStorage.getItem(sceneSessionKey)) {
+  sessionStorage.setItem(sceneSessionKey, String(Date.now()));
+  refreshSceneCache(true);
+}
+window.addEventListener('storage', event => {
+  if (event.key === 'skyportal-scenes-refresh') {
+    sceneCache.clear();
+    refreshSceneCache(false);
+  }
+});
