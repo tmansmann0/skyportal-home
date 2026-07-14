@@ -15,6 +15,7 @@ class Controller:
         self.store = store
         self.portal_factory = portal_factory
         self.portal = None
+        self.active_dreamview_device = None
         self.stop_event = threading.Event()
         self.thread = None
         self.last_slots = {}
@@ -113,23 +114,27 @@ class Controller:
             "value": value,
         }
 
-    def _deactivate_dreamviews(self):
+    def _deactivate_active_dreamview(self):
         config = self.store.data
-        targets = self._dreamview_targets()
-        if not config["govee"]["api_key"] or not targets:
+        if not self.active_dreamview_device:
             return []
+        target = next((
+            device for device in self._dreamview_targets()
+            if str(device.get("device")) == str(self.active_dreamview_device)
+        ), None)
+        if not config["govee"]["api_key"] or not target:
+            return ["The active DreamView group is no longer available."]
         client = GoveeClient(config["govee"]["api_key"])
-        errors = []
-        for target in targets:
-            try:
-                client.set_capability(
-                    target, self._dreamview_capability(target, 0), power_on=False,
-                )
-            except Exception as exc:
-                name = target.get("deviceName") or "DreamView"
-                log.exception("Could not deactivate DreamView %s", name)
-                errors.append(f"{name} off: {exc}")
-        return errors
+        try:
+            client.set_capability(
+                target, self._dreamview_capability(target, 0), power_on=False,
+            )
+            self.active_dreamview_device = None
+            return []
+        except Exception as exc:
+            name = target.get("deviceName") or "DreamView"
+            log.exception("Could not deactivate DreamView %s", name)
+            return [f"{name} off: {exc}"]
 
     def _apply_outputs(self, base_color: str, outputs: dict):
         config = self.store.data
@@ -165,15 +170,16 @@ class Controller:
             GoveeClient(config["govee"]["api_key"]).set_capability(
                 target, self._dreamview_capability(target, 1), power_on=False,
             )
+            self.active_dreamview_device = target.get("device")
             return [], target.get("deviceName") or "DreamView"
         except Exception as exc:
             log.exception("DreamView output error")
             return [f"DreamView: {exc}"], target.get("deviceName") or "DreamView"
 
     def _activate_palette(self, label: str, color: str, outputs: dict, action: dict, event="palette"):
-        # DreamView remains authoritative until explicitly stopped. Always turn
-        # saved groups off first so the next exclusive output starts cleanly.
-        errors = self._deactivate_dreamviews()
+        # DreamView remains authoritative until explicitly stopped. Only send
+        # that stop when this controller previously activated a group.
+        errors = self._deactivate_active_dreamview()
         mode = action.get("action_mode")
         if not mode:
             mode = "home_assistant" if action.get("lights_enabled") is False else "govee"
