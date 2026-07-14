@@ -28,8 +28,8 @@ class FakeGovee:
     def set_color(self, device, color, brightness):
         self.calls.append((device["device"], color, brightness))
 
-    def set_capability(self, device, capability):
-        self.calls.append((device["device"], capability, None))
+    def set_capability(self, device, capability, power_on=True):
+        self.calls.append((device["device"], capability, power_on))
 
 
 class FakeHomeAssistant:
@@ -91,6 +91,29 @@ def test_combo_profile_controls_individual_brightness(monkeypatch):
     Controller(store).handle_figures(figures())
 
     assert FakeGovee.calls == [("left", "#AAAAAA", 75), ("right", "#123456", 22)]
+
+
+def test_dreamview_profile_uses_advertised_toggle_capability(monkeypatch):
+    monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
+    FakeGovee.calls = []
+    device = {"device": "sync-center", "deviceName": "DreamView"}
+    store = Store([device])
+    store.data["element_outputs"] = {"air": {"sync-center": {
+        "mode": "dreamview",
+        "capability": {
+            "type": "devices.capabilities.toggle",
+            "instance": "dreamViewToggle",
+            "value": 1,
+        },
+    }}}
+
+    Controller(store).handle_figure(1, figure=figures()[0])
+
+    assert FakeGovee.calls == [("sync-center", {
+        "type": "devices.capabilities.toggle",
+        "instance": "dreamViewToggle",
+        "value": 1,
+    }, False)]
 
 
 def test_single_light_uses_standard_behavior(monkeypatch):

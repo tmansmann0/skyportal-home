@@ -114,10 +114,18 @@ def create_app(store=None, start_controller=True):
         try:
             client = GoveeClient(key)
             devices = client.discover()
-            lights = [d for d in devices if any(c.get("instance") == "colorRgb" for c in d.get("capabilities", []))]
+            lights = [d for d in devices if any(
+                c.get("instance") in ("colorRgb", "dreamViewToggle")
+                for c in d.get("capabilities", [])
+            )]
             scene_errors = []
             refreshed = 0
             for device in lights:
+                if not any(
+                    capability.get("instance") in ("lightScene", "diyScene")
+                    for capability in device.get("capabilities", [])
+                ):
+                    continue
                 try:
                     scene_cache.get(client, device, force=True)
                     refreshed += 1

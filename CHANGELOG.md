@@ -6,6 +6,8 @@
 - Refresh Govee scene and DIY-scene compatibility once per new dashboard tab
   session, without periodic API polling
 - Refresh scene compatibility immediately during Govee device discovery
+- Offer DreamView as a per-device palette output when Govee advertises the
+  `dreamViewToggle` capability
 
 ## 1.3.0 — 2026-07-12
 

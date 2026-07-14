@@ -93,8 +93,11 @@ class Controller:
         for device in config["govee"]["devices"]:
             try:
                 output = outputs.get(device["device"], {})
-                if output.get("mode") in ("scene", "music") and output.get("capability"):
-                    client.set_capability(device, output["capability"])
+                if output.get("mode") in ("scene", "music", "dreamview") and output.get("capability"):
+                    client.set_capability(
+                        device, output["capability"],
+                        power_on=output.get("mode") != "dreamview",
+                    )
                 else:
                     client.set_color(
                         device, output.get("color") or base_color,

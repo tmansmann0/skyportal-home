@@ -151,6 +151,7 @@ async function refreshSceneCache(force = true) {
   sceneRefreshInFlight = true;
   try {
     for (const device of selected.values()) {
+      if (!capability(device, 'lightScene') && !capability(device, 'diyScene')) continue;
       const response = await fetch('/api/govee/scenes', {
         method: 'POST', headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({device: device.device, refresh: force}),
@@ -167,21 +168,27 @@ function renderCustomizeDevices() {
   const box = $('#customizeDevices');
   box.innerHTML = '';
   if (!selected.size) {
-    box.innerHTML = '<div class="empty-state">Select at least one Govee light first.</div>';
+    box.innerHTML = '<div class="empty-state">Select at least one Govee device first.</div>';
     return;
   }
   [...selected.values()].forEach((device, deviceIndex) => {
     const profile = profileFor(device, deviceIndex);
+    const supportsColor = !!capability(device, 'colorRgb');
     const supportsScene = !!(capability(device, 'lightScene') || capability(device, 'diyScene'));
     const music = capability(device, 'musicMode');
+    const dreamView = capability(device, 'dreamViewToggle');
     const card = document.createElement('article');
     card.className = 'light-profile';
-    const modes = [`<option value="color">Individual color</option>`];
+    const modes = [];
+    if (supportsColor) modes.push('<option value="color">Individual color</option>');
     if (supportsScene) modes.push('<option value="scene">Govee scene</option>');
     if (music) modes.push('<option value="music">Music mode</option>');
+    if (dreamView) modes.push('<option value="dreamview">DreamView</option>');
+    if (!modes.length) modes.push('<option value="color">Individual color</option>');
     card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(device.sku)}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
     const mode = card.querySelector('.profile-mode');
-    mode.value = (profile.mode === 'scene' && !supportsScene) || (profile.mode === 'music' && !music) ? 'color' : profile.mode;
+    const supportedModes = [...mode.options].map(option => option.value);
+    mode.value = supportedModes.includes(profile.mode) ? profile.mode : supportedModes[0];
     profile.mode = mode.value;
     const controls = card.querySelector('.profile-controls');
 
@@ -196,7 +203,7 @@ function renderCustomizeDevices() {
       } else if (profile.mode === 'scene') {
         controls.innerHTML = '<label>Scene<select class="profile-scene"></select></label>';
         loadScenes(device, controls.querySelector('.profile-scene'), profile);
-      } else {
+      } else if (profile.mode === 'music') {
         const fields = music.parameters?.fields || [];
         const options = fields.find(field => field.fieldName === 'musicMode')?.options || [];
         controls.innerHTML = `<label>Music style<select class="music-style">${options.map(option => `<option value="${option.value}">${escapeHtml(option.name)}</option>`).join('')}</select></label><label>Sensitivity <span>${profile.sensitivity ?? 50}%</span><input class="music-sensitivity" type="range" min="0" max="100" value="${profile.sensitivity ?? 50}"></label><label>Base color<input class="music-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label class="check-label"><input class="music-auto" type="checkbox" ${profile.autoColor !== 0 ? 'checked' : ''}> Automatic colors</label>`;
@@ -214,6 +221,9 @@ function renderCustomizeDevices() {
           updateMusic();
         });
         updateMusic();
+      } else {
+        controls.innerHTML = '<div class="dreamview-note"><strong>DreamView</strong><span>Turns on the DreamView setup already configured for this device in Govee Home.</span></div>';
+        profile.capability = {type: dreamView.type, instance: dreamView.instance, value: 1};
       }
     };
     mode.onchange = renderControls;

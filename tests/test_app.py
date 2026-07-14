@@ -1,3 +1,4 @@
+from skyportal import app as app_module
 from skyportal.app import create_app
 from skyportal.config import ConfigStore
 
@@ -54,3 +55,31 @@ def test_palette_preview_endpoints(tmp_path):
 
     response = web.post("/api/test-figure/not-a-kind/0")
     assert response.status_code == 404
+
+
+def test_discovery_includes_dreamview_only_devices(tmp_path, monkeypatch):
+    class FakeGovee:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def discover(self):
+            return [
+                {"device": "dream", "sku": "H1", "capabilities": [{
+                    "type": "devices.capabilities.toggle", "instance": "dreamViewToggle",
+                }]},
+                {"device": "light", "sku": "H2", "capabilities": [{
+                    "type": "devices.capabilities.color_setting", "instance": "colorRgb",
+                }]},
+                {"device": "sensor", "sku": "H3", "capabilities": []},
+            ]
+
+    monkeypatch.setattr(app_module, "GoveeClient", FakeGovee)
+    web, store = client(tmp_path)
+    store.data["govee"]["api_key"] = "test"
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/govee/discover", json={})
+
+    assert response.status_code == 200
+    assert [device["device"] for device in response.get_json()["devices"]] == ["dream", "light"]

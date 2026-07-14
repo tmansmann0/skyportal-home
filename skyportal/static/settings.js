@@ -8,7 +8,7 @@ const notice = (message, error = false) => { const node = $('#notice'); node.tex
 
 function renderDevices() {
   const box = $('#devices');
-  box.innerHTML = discovered.length ? '' : 'No compatible color lights discovered yet.';
+  box.innerHTML = discovered.length ? '' : 'No compatible Govee devices discovered yet.';
   discovered.forEach(device => {
     const row = document.createElement('label');
     row.className = 'device';
@@ -40,7 +40,7 @@ $('#discover').onclick = async () => {
     const sceneNote = payload.scenes_refreshed === payload.devices.length
       ? ' Scene lists refreshed.'
       : ` Refreshed scenes for ${payload.scenes_refreshed || 0} light${payload.scenes_refreshed === 1 ? '' : 's'}.`;
-    notice(`Found ${payload.devices.length} compatible light${payload.devices.length === 1 ? '' : 's'}.${sceneNote}`);
+    notice(`Found ${payload.devices.length} compatible device${payload.devices.length === 1 ? '' : 's'}.${sceneNote}`);
   } catch (error) { notice(error.message, true); }
 };
 $('#save').onclick = async () => {
