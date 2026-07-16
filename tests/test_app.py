@@ -1,3 +1,4 @@
+from skyportal import app as app_module
 from skyportal.app import create_app
 from skyportal.config import ConfigStore
 
@@ -29,6 +30,7 @@ def test_settings_are_on_a_separate_authenticated_page(tmp_path):
     dashboard = web.get("/")
     assert b'href="/settings"' in dashboard.data
     assert b'id="goveeKey"' not in dashboard.data
+    assert b'id="previewCustomize"' in dashboard.data
 
 
 def test_login_next_rejects_external_redirect(tmp_path):
@@ -38,3 +40,69 @@ def test_login_next_rejects_external_redirect(tmp_path):
         data={"token": store.data["setup_token"], "next": "//example.com"},
     )
     assert response.headers["Location"] == "/"
+
+
+def test_palette_preview_endpoints(tmp_path):
+    web, store = client(tmp_path)
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/test/fire")
+    assert response.get_json()["ok"]
+
+    response = web.post("/api/test-figure/figure/0")
+    assert response.get_json()["ok"]
+
+    response = web.post("/api/test-figure/not-a-kind/0")
+    assert response.status_code == 404
+
+
+def test_discovery_includes_only_individual_color_lights(tmp_path, monkeypatch):
+    class FakeGovee:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def discover(self):
+            return [
+                {"device": "group", "sku": "DreamViewScenic", "capabilities": [{
+                    "type": "devices.capabilities.on_off", "instance": "powerSwitch",
+                }]},
+                {"device": "dream", "sku": "H1", "capabilities": [{
+                    "type": "devices.capabilities.toggle", "instance": "dreamViewToggle",
+                }]},
+                {"device": "light", "sku": "H2", "capabilities": [{
+                    "type": "devices.capabilities.color_setting", "instance": "colorRgb",
+                }]},
+                {"device": "sensor", "sku": "H3", "capabilities": []},
+            ]
+
+    monkeypatch.setattr(app_module, "GoveeClient", FakeGovee)
+    web, store = client(tmp_path)
+    store.data["govee"]["api_key"] = "test"
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/govee/discover", json={})
+
+    assert response.status_code == 200
+    payload = response.get_json()
+    assert [device["device"] for device in payload["devices"]] == ["light"]
+    assert payload["scene_devices"] == 0
+
+
+def test_legacy_dreamview_configuration_migrates_to_govee(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('''{
+      "govee": {"devices": [
+        {"device": "group", "sku": "DreamViewScenic"},
+        {"device": "light", "sku": "H1"}
+      ]},
+      "element_actions": {
+        "fire": {"action_mode": "dreamview", "dreamview_device": "group"}
+      }
+    }''')
+
+    store = ConfigStore(path)
+
+    assert [device["device"] for device in store.data["govee"]["devices"]] == ["light"]
+    assert store.data["element_actions"]["fire"] == {"action_mode": "govee"}

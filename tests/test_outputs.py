@@ -1,4 +1,4 @@
-from skyportal.outputs import GoveeClient
+from skyportal.outputs import GoveeClient, GoveeSceneCache
 
 
 class Response:
@@ -43,3 +43,16 @@ def test_govee_scene_discovery_normalizes_capabilities():
     scenes = GoveeClient("secret", SceneSession()).discover_scenes({"sku": "H123", "device": "AA:BB"})
     assert [scene["name"] for scene in scenes] == ["lightScene", "diyScene"]
     assert scenes[0]["capability"]["value"] == 7
+
+
+def test_govee_scene_cache_only_refreshes_when_forced():
+    client = GoveeClient("secret", SceneSession())
+    cache = GoveeSceneCache()
+    device = {"sku": "H123", "device": "AA:BB"}
+
+    first = cache.get(client, device)
+    second = cache.get(client, device)
+    refreshed = cache.get(client, device, force=True)
+
+    assert first == second == refreshed
+    assert len(client.session.calls) == 4

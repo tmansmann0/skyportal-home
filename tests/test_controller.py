@@ -28,8 +28,8 @@ class FakeGovee:
     def set_color(self, device, color, brightness):
         self.calls.append((device["device"], color, brightness))
 
-    def set_capability(self, device, capability):
-        self.calls.append((device["device"], capability, None))
+    def set_capability(self, device, capability, power_on=True):
+        self.calls.append((device["device"], capability, power_on))
 
 
 class FakeHomeAssistant:
@@ -91,6 +91,23 @@ def test_combo_profile_controls_individual_brightness(monkeypatch):
     Controller(store).handle_figures(figures())
 
     assert FakeGovee.calls == [("left", "#AAAAAA", 75), ("right", "#123456", 22)]
+
+
+def test_govee_mode_does_not_also_activate_home_assistant(monkeypatch):
+    monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
+    monkeypatch.setattr(controller_module, "HomeAssistantClient", FakeHomeAssistant)
+    FakeGovee.calls = []
+    FakeHomeAssistant.calls = []
+    store = Store([{"device": "only", "sku": "H1"}])
+    store.data["home_assistant"] = {"url": "http://ha", "token": "token"}
+    store.data["element_actions"] = {"air": {
+        "action_mode": "govee", "ha_scene": "scene.should_not_run",
+    }}
+
+    Controller(store).handle_figure(1, figure=figures()[0])
+
+    assert FakeGovee.calls == [("only", "#AAAAAA", 75)]
+    assert FakeHomeAssistant.calls == []
 
 
 def test_single_light_uses_standard_behavior(monkeypatch):

@@ -32,3 +32,37 @@ def test_query_uses_portal_slot_index():
 
     assert portal.query(2, 1) == bytes(range(16))
     assert device.writes[0][1:4] == [ord("Q"), 0x12, 1]
+
+
+def test_usb_close_disposes_stale_resources():
+    class UsbDevice:
+        attached = False
+
+        def attach_kernel_driver(self, interface):
+            self.attached = interface == 0
+
+    class UsbUtil:
+        released = False
+        disposed = False
+
+        def release_interface(self, device, interface):
+            self.released = interface == 0
+
+        def dispose_resources(self, device):
+            self.disposed = True
+
+    device = UsbDevice()
+    util = UsbUtil()
+    portal = Portal()
+    portal.device = device
+    portal._usb = True
+    portal._usb_util = util
+    portal._detached_kernel_driver = True
+
+    portal.close()
+
+    assert util.released is True
+    assert util.disposed is True
+    assert device.attached is True
+    assert portal.device is None
+    assert portal._usb_util is None

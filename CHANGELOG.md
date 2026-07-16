@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0 — 2026-07-13
+
+- Add an in-dialog preview action for every customizable palette
+- Refresh Govee scene and DIY-scene compatibility once per new dashboard tab
+  session, without periodic API polling
+- Refresh scene compatibility immediately during Govee device discovery
+- Route every palette through one mutually exclusive output mode: individual
+  Govee controls or a Home Assistant scene
+- Dispose stale libusb resources so the portal can recover after a USB
+  disconnect instead of remaining in an input/output error loop
+- Remove experimental DreamView group control after unreliable API behavior
+
 ## 1.3.0 — 2026-07-12
 
 - Treat SWAP Force tops and bottoms as two current characters by default, with

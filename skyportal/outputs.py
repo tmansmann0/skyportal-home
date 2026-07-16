@@ -1,4 +1,5 @@
 import logging
+import threading
 import uuid
 
 import requests
@@ -8,6 +9,23 @@ log = logging.getLogger(__name__)
 
 class OutputError(RuntimeError):
     pass
+
+
+class GoveeSceneCache:
+    def __init__(self):
+        self.entries = {}
+        self.lock = threading.Lock()
+
+    def get(self, client, device: dict, force: bool = False) -> list[dict]:
+        key = (client.api_key, device.get("sku"), device.get("device"))
+        with self.lock:
+            cached = self.entries.get(key)
+            if cached and not force:
+                return cached
+        scenes = client.discover_scenes(device)
+        with self.lock:
+            self.entries[key] = scenes
+        return scenes
 
 
 class GoveeClient:
