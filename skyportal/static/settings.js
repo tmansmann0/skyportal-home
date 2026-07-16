@@ -12,8 +12,7 @@ function renderDevices() {
   discovered.forEach(device => {
     const row = document.createElement('label');
     row.className = 'device';
-    const descriptor = device.sku === 'DreamViewScenic' ? 'DreamView group' : device.sku;
-    row.innerHTML = `<input type="checkbox" ${selected.has(device.device) ? 'checked' : ''}><span><strong>${escapeHtml(device.deviceName || device.sku)}</strong><br><small>${escapeHtml(descriptor)} · ${escapeHtml(device.device)}</small></span>`;
+    row.innerHTML = `<input type="checkbox" ${selected.has(device.device) ? 'checked' : ''}><span><strong>${escapeHtml(device.deviceName || device.sku)}</strong><br><small>${escapeHtml(device.sku)} · ${escapeHtml(device.device)}</small></span>`;
     row.querySelector('input').onchange = event => event.target.checked ? selected.set(device.device, device) : selected.delete(device.device);
     box.append(row);
   });

@@ -57,7 +57,7 @@ def test_palette_preview_endpoints(tmp_path):
     assert response.status_code == 404
 
 
-def test_discovery_includes_dreamview_only_devices(tmp_path, monkeypatch):
+def test_discovery_includes_only_individual_color_lights(tmp_path, monkeypatch):
     class FakeGovee:
         def __init__(self, api_key):
             self.api_key = api_key
@@ -86,5 +86,23 @@ def test_discovery_includes_dreamview_only_devices(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert [device["device"] for device in payload["devices"]] == ["group", "dream", "light"]
+    assert [device["device"] for device in payload["devices"]] == ["light"]
     assert payload["scene_devices"] == 0
+
+
+def test_legacy_dreamview_configuration_migrates_to_govee(tmp_path):
+    path = tmp_path / "config.json"
+    path.write_text('''{
+      "govee": {"devices": [
+        {"device": "group", "sku": "DreamViewScenic"},
+        {"device": "light", "sku": "H1"}
+      ]},
+      "element_actions": {
+        "fire": {"action_mode": "dreamview", "dreamview_device": "group"}
+      }
+    }''')
+
+    store = ConfigStore(path)
+
+    assert [device["device"] for device in store.data["govee"]["devices"]] == ["light"]
+    assert store.data["element_actions"]["fire"] == {"action_mode": "govee"}

@@ -28,13 +28,7 @@ function capability(device, instance) {
 }
 
 function individualDevices() {
-  return [...selected.values()].filter(device => !['DreamViewScenic', 'BaseGroup', 'SameModeGroup'].includes(device.sku));
-}
-
-function dreamViewTargets() {
-  const devices = [...selected.values()];
-  const groups = devices.filter(device => device.sku === 'DreamViewScenic');
-  return groups.length ? groups : devices.filter(device => capability(device, 'dreamViewToggle'));
+  return [...selected.values()];
 }
 
 function namedCollection(kind) {
@@ -110,8 +104,9 @@ function activeAction() {
 function renderPaletteAutomation() {
   const action = activeAction();
   action.action_mode ||= action.lights_enabled === false ? 'home_assistant' : 'govee';
+  if (!['govee', 'home_assistant'].includes(action.action_mode)) action.action_mode = 'govee';
   const box = $('#paletteAutomation');
-  box.innerHTML = `<div class="output-mode-tabs"><button type="button" data-mode="govee">Govee</button><button type="button" data-mode="home_assistant">Home Assistant</button><button type="button" data-mode="dreamview">DreamView</button></div><div id="outputModePanel" class="output-mode-panel"></div>`;
+  box.innerHTML = `<div class="output-mode-tabs"><button type="button" data-mode="govee">Govee</button><button type="button" data-mode="home_assistant">Home Assistant</button></div><div id="outputModePanel" class="output-mode-panel"></div>`;
   const renderMode = () => {
     box.querySelectorAll('.output-mode-tabs button').forEach(button => button.classList.toggle('active', button.dataset.mode === action.action_mode));
     const panel = $('#outputModePanel');
@@ -120,18 +115,9 @@ function renderPaletteAutomation() {
     if (action.action_mode === 'govee') {
       panel.innerHTML = '<strong>Individual Govee controls</strong><span>Each selected light uses its customized color, brightness, scene, or music mode.</span>';
       renderCustomizeDevices();
-    } else if (action.action_mode === 'home_assistant') {
+    } else {
       panel.innerHTML = `<label>Home Assistant scene<input id="paletteHaScene" placeholder="scene.portal_action" value="${escapeHtml(action.ha_scene || '')}"></label><span>Only this Home Assistant scene will run.</span>`;
       $('#paletteHaScene').oninput = event => { action.ha_scene = event.target.value.trim(); };
-    } else {
-      const targets = dreamViewTargets();
-      if (!targets.length) {
-        panel.innerHTML = '<strong>No DreamView groups selected</strong><span>Open Settings, discover devices, and select a Scenic DreamView group first.</span>';
-        return;
-      }
-      if (!targets.some(device => String(device.device) === String(action.dreamview_device))) action.dreamview_device = targets[0].device;
-      panel.innerHTML = `<label>DreamView group<select id="paletteDreamView">${targets.map(device => `<option value="${escapeHtml(device.device)}" ${String(device.device) === String(action.dreamview_device) ? 'selected' : ''}>${escapeHtml(device.deviceName || 'DreamView')} — DreamView group</option>`).join('')}</select></label><span>Only this saved Govee DreamView group will run; individual light controls are ignored.</span>`;
-      $('#paletteDreamView').onchange = event => { action.dreamview_device = event.target.value; };
     }
   };
   box.querySelectorAll('.output-mode-tabs button').forEach(button => button.onclick = () => {

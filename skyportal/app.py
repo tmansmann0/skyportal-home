@@ -114,8 +114,8 @@ def create_app(store=None, start_controller=True):
         try:
             client = GoveeClient(key)
             devices = client.discover()
-            lights = [d for d in devices if d.get("sku") == "DreamViewScenic" or any(
-                c.get("instance") in ("colorRgb", "dreamViewToggle")
+            lights = [d for d in devices if any(
+                c.get("instance") == "colorRgb"
                 for c in d.get("capabilities", [])
             )]
             scene_errors = []

@@ -7,13 +7,10 @@
   session, without periodic API polling
 - Refresh scene compatibility immediately during Govee device discovery
 - Route every palette through one mutually exclusive output mode: individual
-  Govee controls, a Home Assistant scene, or DreamView
-- Discover saved Scenic DreamView groups and activate one as a palette-wide
-  alternative to individual light controls
-- Refresh renamed DreamView groups during device discovery and fully hide
-  individual light controls outside Govee mode
-- Track the DreamView group activated by the controller and stop it only when
-  transitioning away from or replacing that active DreamView
+  Govee controls or a Home Assistant scene
+- Dispose stale libusb resources so the portal can recover after a USB
+  disconnect instead of remaining in an input/output error loop
+- Remove experimental DreamView group control after unreliable API behavior
 
 ## 1.3.0 — 2026-07-12
 

@@ -7,7 +7,6 @@ from .outputs import GoveeClient, HomeAssistantClient
 from .portal import Portal
 
 log = logging.getLogger(__name__)
-VIRTUAL_GROUP_SKUS = {"DreamViewScenic", "BaseGroup", "SameModeGroup"}
 
 
 class Controller:
@@ -15,7 +14,6 @@ class Controller:
         self.store = store
         self.portal_factory = portal_factory
         self.portal = None
-        self.active_dreamview_device = None
         self.stop_event = threading.Event()
         self.thread = None
         self.last_slots = {}
@@ -87,54 +85,7 @@ class Controller:
             HomeAssistantClient(ha["url"], ha["token"]).activate_scene(scene)
 
     def _individual_devices(self):
-        return [
-            device for device in self.store.data["govee"]["devices"]
-            if device.get("sku") not in VIRTUAL_GROUP_SKUS
-        ]
-
-    def _dreamview_targets(self):
-        return [
-            device for device in self.store.data["govee"]["devices"]
-            if device.get("sku") == "DreamViewScenic" or any(
-                capability.get("instance") == "dreamViewToggle"
-                for capability in device.get("capabilities", [])
-            )
-        ]
-
-    @staticmethod
-    def _dreamview_capability(target: dict, value: int):
-        instance = "powerSwitch" if target.get("sku") == "DreamViewScenic" else "dreamViewToggle"
-        advertised = next((
-            capability for capability in target.get("capabilities", [])
-            if capability.get("instance") == instance
-        ), None)
-        return {
-            "type": advertised.get("type") if advertised else "devices.capabilities.on_off",
-            "instance": instance,
-            "value": value,
-        }
-
-    def _deactivate_active_dreamview(self):
-        config = self.store.data
-        if not self.active_dreamview_device:
-            return []
-        target = next((
-            device for device in self._dreamview_targets()
-            if str(device.get("device")) == str(self.active_dreamview_device)
-        ), None)
-        if not config["govee"]["api_key"] or not target:
-            return ["The active DreamView group is no longer available."]
-        client = GoveeClient(config["govee"]["api_key"])
-        try:
-            client.set_capability(
-                target, self._dreamview_capability(target, 0), power_on=False,
-            )
-            self.active_dreamview_device = None
-            return []
-        except Exception as exc:
-            name = target.get("deviceName") or "DreamView"
-            log.exception("Could not deactivate DreamView %s", name)
-            return [f"{name} off: {exc}"]
+        return self.store.data["govee"]["devices"]
 
     def _apply_outputs(self, base_color: str, outputs: dict):
         config = self.store.data
@@ -158,28 +109,8 @@ class Controller:
                 errors.append(f"{name}: {exc}")
         return errors
 
-    def _activate_dreamview(self, device_id: str):
-        config = self.store.data
-        if not config["govee"]["api_key"]:
-            return ["Configure a Govee API key first."], ""
-        targets = self._dreamview_targets()
-        target = next((device for device in targets if str(device.get("device")) == str(device_id)), None)
-        if not target:
-            return ["Select an available DreamView group."], ""
-        try:
-            GoveeClient(config["govee"]["api_key"]).set_capability(
-                target, self._dreamview_capability(target, 1), power_on=False,
-            )
-            self.active_dreamview_device = target.get("device")
-            return [], target.get("deviceName") or "DreamView"
-        except Exception as exc:
-            log.exception("DreamView output error")
-            return [f"DreamView: {exc}"], target.get("deviceName") or "DreamView"
-
     def _activate_palette(self, label: str, color: str, outputs: dict, action: dict, event="palette"):
-        # DreamView remains authoritative until explicitly stopped. Only send
-        # that stop when this controller previously activated a group.
-        errors = self._deactivate_active_dreamview()
+        errors = []
         mode = action.get("action_mode")
         if not mode:
             mode = "home_assistant" if action.get("lights_enabled") is False else "govee"
@@ -191,9 +122,6 @@ class Controller:
             except Exception as exc:
                 log.exception("Home Assistant output error")
                 errors.append(f"Home Assistant: {exc}")
-        elif mode == "dreamview":
-            dreamview_errors, detail = self._activate_dreamview(action.get("dreamview_device", ""))
-            errors.extend(dreamview_errors)
         else:
             errors.extend(self._apply_outputs(color, outputs))
         self.state["last_error"] = "; ".join(errors) if errors else None

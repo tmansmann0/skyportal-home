@@ -61,9 +61,15 @@ class Portal:
                     device.attach_kernel_driver(0)
                 except Exception:
                     pass
+            try:
+                self._usb_util.dispose_resources(device)
+            except Exception:
+                pass
         else:
             device.close()
         self._usb = False
+        self._usb_core = None
+        self._usb_util = None
         self._detached_kernel_driver = False
 
     @staticmethod
