@@ -1,5 +1,6 @@
 const config = window.INITIAL_CONFIG;
 const selected = new Map((config.govee.devices || []).map(device => [device.device, device]));
+const selectedLifx = new Map((config.lifx?.devices || []).map(device => [device.serial, device]));
 let elementOutputs = structuredClone(config.element_outputs || {});
 let elementActions = structuredClone(config.element_actions || {});
 let elementCombos = structuredClone(config.element_combos || {});
@@ -28,7 +29,16 @@ function capability(device, instance) {
 }
 
 function individualDevices() {
-  return [...selected.values()];
+  const govee = [...selected.values()].map(device => ({...device, provider: 'govee'}));
+  const lifx = [...selectedLifx.values()].map(device => ({
+    ...device,
+    provider: 'lifx',
+    device: `lifx:${device.serial}`,
+    deviceName: device.label,
+    sku: 'LIFX LAN',
+    capabilities: [{type: 'lifx.color', instance: 'colorRgb'}],
+  }));
+  return [...govee, ...lifx];
 }
 
 function namedCollection(kind) {
@@ -88,7 +98,8 @@ function profileFor(device, deviceIndex) {
   else if (activeComboKey) outputs = (elementCombos[activeComboKey].outputs ||= {});
   else outputs = (elementOutputs[activeElement] ||= {});
   outputs[device.device] ||= {
-    mode: 'color', color: activeColor(deviceIndex), brightness: config.govee.brightness,
+    mode: 'color', color: activeColor(deviceIndex),
+    brightness: device.provider === 'lifx' ? config.lifx.brightness : config.govee.brightness,
   };
   return outputs[device.device];
 }
@@ -106,14 +117,14 @@ function renderPaletteAutomation() {
   action.action_mode ||= action.lights_enabled === false ? 'home_assistant' : 'govee';
   if (!['govee', 'home_assistant'].includes(action.action_mode)) action.action_mode = 'govee';
   const box = $('#paletteAutomation');
-  box.innerHTML = `<div class="output-mode-tabs"><button type="button" data-mode="govee">Govee</button><button type="button" data-mode="home_assistant">Home Assistant</button></div><div id="outputModePanel" class="output-mode-panel"></div>`;
+  box.innerHTML = `<div class="output-mode-tabs"><button type="button" data-mode="govee">Lights</button><button type="button" data-mode="home_assistant">Home Assistant</button></div><div id="outputModePanel" class="output-mode-panel"></div>`;
   const renderMode = () => {
     box.querySelectorAll('.output-mode-tabs button').forEach(button => button.classList.toggle('active', button.dataset.mode === action.action_mode));
     const panel = $('#outputModePanel');
     const devices = $('#customizeDevices');
     devices.classList.toggle('hidden', action.action_mode !== 'govee');
     if (action.action_mode === 'govee') {
-      panel.innerHTML = '<strong>Individual Govee controls</strong><span>Each selected light uses its customized color, brightness, scene, or music mode.</span>';
+      panel.innerHTML = '<strong>Individual light controls</strong><span>Each selected Govee or LIFX light uses its customized color and brightness. Compatible Govee lights may also use scenes or music mode.</span>';
       renderCustomizeDevices();
     } else {
       panel.innerHTML = `<label>Home Assistant scene<input id="paletteHaScene" placeholder="scene.portal_action" value="${escapeHtml(action.ha_scene || '')}"></label><span>Only this Home Assistant scene will run.</span>`;
@@ -189,7 +200,7 @@ function renderCustomizeDevices() {
   const devices = individualDevices();
   box.innerHTML = '';
   if (!devices.length) {
-    box.innerHTML = '<div class="empty-state">Select at least one individual Govee light first.</div>';
+    box.innerHTML = '<div class="empty-state">Select at least one Govee or LIFX light first.</div>';
     return;
   }
   devices.forEach((device, deviceIndex) => {
@@ -204,7 +215,7 @@ function renderCustomizeDevices() {
     if (supportsScene) modes.push('<option value="scene">Govee scene</option>');
     if (music) modes.push('<option value="music">Music mode</option>');
     if (!modes.length) modes.push('<option value="color">Individual color</option>');
-    card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(device.sku)}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
+    card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(device.provider === 'lifx' ? 'LIFX LAN' : device.sku)}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
     const mode = card.querySelector('.profile-mode');
     const supportedModes = [...mode.options].map(option => option.value);
     mode.value = supportedModes.includes(profile.mode) ? profile.mode : supportedModes[0];
@@ -215,7 +226,8 @@ function renderCustomizeDevices() {
       controls.innerHTML = '';
       profile.mode = mode.value;
       if (profile.mode === 'color') {
-        controls.innerHTML = `<label>Color<input class="profile-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label>Brightness <span>${profile.brightness || config.govee.brightness}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || config.govee.brightness}"></label>`;
+        const defaultBrightness = device.provider === 'lifx' ? config.lifx.brightness : config.govee.brightness;
+        controls.innerHTML = `<label>Color<input class="profile-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label>Brightness <span>${profile.brightness || defaultBrightness}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || defaultBrightness}"></label>`;
         controls.querySelector('.profile-color').oninput = event => { profile.color = event.target.value.toUpperCase(); };
         const brightness = controls.querySelector('.profile-brightness');
         brightness.oninput = event => { profile.brightness = +event.target.value; event.target.previousElementSibling.textContent = `${event.target.value}%`; };

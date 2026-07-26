@@ -7,7 +7,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from .config import ConfigStore
 from .controller import Controller
 from .figures import CHARACTERS, ELEMENT_COLORS, FIGURES, POWER_UPS
-from .outputs import GoveeClient, GoveeSceneCache
+from .outputs import GoveeClient, GoveeSceneCache, LifxLanClient
 
 
 def create_app(store=None, start_controller=True):
@@ -60,6 +60,7 @@ def create_app(store=None, start_controller=True):
     def settings():
         data = request.get_json(force=True)
         govee = data.get("govee", {})
+        lifx = data.get("lifx", {})
         ha = data.get("home_assistant", {})
         if govee.get("api_key") and govee["api_key"] != "configured":
             store.data["govee"]["api_key"] = govee["api_key"].strip()
@@ -67,6 +68,16 @@ def create_app(store=None, start_controller=True):
             store.data["govee"]["devices"] = govee["devices"]
         if "brightness" in govee:
             store.data["govee"]["brightness"] = max(1, min(100, int(govee["brightness"])))
+        if "devices" in lifx:
+            normalized_lifx = []
+            for device in lifx["devices"]:
+                try:
+                    normalized_lifx.append(LifxLanClient.normalize_device(device))
+                except Exception:
+                    continue
+            store.data["lifx"]["devices"] = normalized_lifx
+        if "brightness" in lifx:
+            store.data["lifx"]["brightness"] = max(1, min(100, int(lifx["brightness"])))
         if "element_colors" in data:
             for element in ELEMENT_COLORS:
                 value = data["element_colors"].get(element)
@@ -135,6 +146,14 @@ def create_app(store=None, start_controller=True):
                 "scenes_refreshed": refreshed,
                 "scene_errors": scene_errors,
             })
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.post("/api/lifx/discover")
+    @authenticated
+    def discover_lifx():
+        try:
+            return jsonify({"ok": True, "devices": LifxLanClient().discover()})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
 

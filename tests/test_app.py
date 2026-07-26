@@ -106,3 +106,52 @@ def test_legacy_dreamview_configuration_migrates_to_govee(tmp_path):
 
     assert [device["device"] for device in store.data["govee"]["devices"]] == ["light"]
     assert store.data["element_actions"]["fire"] == {"action_mode": "govee"}
+
+
+def test_lifx_discovery_is_local_and_requires_authentication(tmp_path, monkeypatch):
+    class FakeLifx:
+        def discover(self):
+            return [{
+                "serial": "d073d5123456", "label": "Kitchen",
+                "ip": "192.168.1.44", "port": 56700,
+            }]
+
+    monkeypatch.setattr(app_module, "LifxLanClient", FakeLifx)
+    web, _ = client(tmp_path)
+
+    assert web.post("/api/lifx/discover").status_code == 302
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/lifx/discover")
+
+    assert response.status_code == 200
+    assert response.get_json()["devices"][0]["label"] == "Kitchen"
+
+
+def test_lifx_settings_store_only_normalized_device_metadata(tmp_path):
+    web, store = client(tmp_path)
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/settings", json={
+        "lifx": {
+            "brightness": 42,
+            "devices": [
+                {
+                    "serial": "D0:73:D5:12:34:56", "label": "Kitchen",
+                    "ip": "192.168.1.44", "port": "56700", "untrusted": "discard me",
+                },
+                {"serial": "bad", "label": "Invalid", "ip": "not-an-ip", "port": 0},
+            ],
+        },
+    })
+
+    assert response.status_code == 200
+    assert store.data["lifx"] == {
+        "brightness": 42,
+        "devices": [{
+            "serial": "d073d5123456", "label": "Kitchen",
+            "ip": "192.168.1.44", "port": 56700,
+        }],
+    }

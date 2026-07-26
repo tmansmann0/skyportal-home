@@ -3,20 +3,24 @@ import threading
 import time
 
 from .figures import identify, identify_all_present
-from .outputs import GoveeClient, HomeAssistantClient
+from .outputs import GoveeClient, HomeAssistantClient, LifxLanClient
 from .portal import Portal
 
 log = logging.getLogger(__name__)
+PORTAL_CONFIDENCE_SECONDS = 1.25
 
 
 class Controller:
-    def __init__(self, store, portal_factory=Portal):
+    def __init__(self, store, portal_factory=Portal, confidence_seconds=PORTAL_CONFIDENCE_SECONDS):
         self.store = store
         self.portal_factory = portal_factory
+        self.confidence_seconds = confidence_seconds
         self.portal = None
         self.stop_event = threading.Event()
         self.thread = None
         self.last_slots = {}
+        self.pending_slots = None
+        self.pending_since = None
         self.state = {
             "portal": "disconnected", "figure": None, "figures": [],
             "last_error": None, "updated_at": None,
@@ -41,13 +45,15 @@ class Controller:
                     self.state["portal"] = "connected"
                 slots = self.portal.status()
                 current = {slot: self.portal.read_identity(slot) for slot in slots}
-                if current and current != self.last_slots:
-                    self.handle_figures(identify_all_present(list(current.values())))
+                previous = self.last_slots
+                if self._transition_confirmed(current):
+                    self.last_slots = current
+                    if current:
+                        self.handle_figures(identify_all_present(list(current.values())))
+                    elif previous:
+                        self.handle_remove()
                 if not current and not self.last_slots and self.state["updated_at"] is None:
                     self.handle_default()
-                if self.last_slots and not current:
-                    self.handle_remove()
-                self.last_slots = current
                 time.sleep(0.25)
             except Exception as exc:
                 log.exception("Portal loop error")
@@ -59,6 +65,33 @@ class Controller:
                         pass
                 self.portal = None
                 self.stop_event.wait(2)
+
+    def _transition_confirmed(self, current: dict, now=None) -> bool:
+        now = time.monotonic() if now is None else now
+        if current == self.last_slots:
+            if self.pending_slots is not None:
+                log.warning(
+                    "Rejected transient portal reading after %.2fs: %r",
+                    now - self.pending_since, self.pending_slots,
+                )
+            self.pending_slots = None
+            self.pending_since = None
+            return False
+        if current != self.pending_slots:
+            if self.pending_slots is not None:
+                log.warning("Portal candidate changed before confirmation: %r", self.pending_slots)
+            self.pending_slots = dict(current)
+            self.pending_since = now
+            log.info(
+                "Portal change candidate; waiting %.2fs for confirmation: %r",
+                self.confidence_seconds, current,
+            )
+            return False
+        if now - self.pending_since < self.confidence_seconds:
+            return False
+        self.pending_slots = None
+        self.pending_since = None
+        return True
 
     def _record(self, event: str, label: str, detail: str = ""):
         entry = {"at": time.time(), "event": event, "label": label, "detail": detail}
@@ -85,21 +118,47 @@ class Controller:
             HomeAssistantClient(ha["url"], ha["token"]).activate_scene(scene)
 
     def _individual_devices(self):
-        return self.store.data["govee"]["devices"]
+        govee = [
+            {**device, "provider": "govee"}
+            for device in self.store.data["govee"]["devices"]
+        ]
+        lifx = [
+            {
+                **device,
+                "provider": "lifx",
+                "device": f"lifx:{device['serial']}",
+                "deviceName": device.get("label") or "LIFX bulb",
+                "sku": "LIFX LAN",
+            }
+            for device in self.store.data.get("lifx", {}).get("devices", [])
+        ]
+        return [*govee, *lifx]
 
     def _apply_outputs(self, base_color: str, outputs: dict):
         config = self.store.data
-        if not config["govee"]["api_key"]:
-            return []
-        client = GoveeClient(config["govee"]["api_key"])
+        govee_client = (
+            GoveeClient(config["govee"]["api_key"])
+            if config["govee"]["api_key"] else None
+        )
+        lifx_client = LifxLanClient()
         errors = []
         for device in self._individual_devices():
             try:
                 output = outputs.get(device["device"], {})
-                if output.get("mode") in ("scene", "music") and output.get("capability"):
-                    client.set_capability(device, output["capability"])
+                if device["provider"] == "lifx":
+                    lifx_client.set_color(
+                        device, output.get("color") or base_color,
+                        int(output.get(
+                            "brightness",
+                            config.get("lifx", {}).get("brightness", 75),
+                        )),
+                    )
+                elif not govee_client:
+                    continue
+                elif output.get("mode") in ("scene", "music") and output.get("capability"):
+                    govee_client.set_capability(device, output["capability"])
                 else:
-                    client.set_color(
+                    govee_client.set_color(
                         device, output.get("color") or base_color,
                         int(output.get("brightness", config["govee"]["brightness"])),
                     )

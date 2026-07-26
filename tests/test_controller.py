@@ -42,11 +42,38 @@ class FakeHomeAssistant:
         self.calls.append(scene)
 
 
+class FakeLifx:
+    calls = []
+
+    def set_color(self, device, color, brightness):
+        self.calls.append((device["serial"], color, brightness))
+
+
 def figures():
     return [
         {"id": 1, "variant_id": 0, "name": "Air One", "element": "air"},
         {"id": 2, "variant_id": 0, "name": "Fire Two", "element": "fire"},
     ]
+
+
+def test_transient_portal_identity_is_rejected_before_switching():
+    controller = Controller(Store([]), confidence_seconds=1.25)
+    controller.last_slots = {0: (15, 0)}
+
+    assert controller._transition_confirmed({0: (1, 0)}, now=10.0) is False
+    assert controller._transition_confirmed({0: (1, 0)}, now=10.9) is False
+    assert controller._transition_confirmed({0: (15, 0)}, now=11.0) is False
+    assert controller.pending_slots is None
+
+
+def test_stable_portal_identity_is_confirmed_after_confidence_window():
+    controller = Controller(Store([]), confidence_seconds=1.25)
+    controller.last_slots = {0: (15, 0)}
+
+    assert controller._transition_confirmed({0: (1, 0)}, now=20.0) is False
+    assert controller._transition_confirmed({0: (1, 0)}, now=21.0) is False
+    assert controller._transition_confirmed({0: (1, 0)}, now=21.25) is True
+    assert controller.pending_slots is None
 
 
 def test_combo_splits_lights_as_evenly_as_possible(monkeypatch):
@@ -91,6 +118,28 @@ def test_combo_profile_controls_individual_brightness(monkeypatch):
     Controller(store).handle_figures(figures())
 
     assert FakeGovee.calls == [("left", "#AAAAAA", 75), ("right", "#123456", 22)]
+
+
+def test_lifx_bulbs_join_palette_outputs_and_combo_counts(monkeypatch):
+    monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
+    monkeypatch.setattr(controller_module, "LifxLanClient", FakeLifx)
+    FakeGovee.calls = []
+    FakeLifx.calls = []
+    store = Store([{"device": "govee"}])
+    store.data["lifx"] = {
+        "brightness": 64,
+        "devices": [{
+            "serial": "d073d5123456", "label": "Desk",
+            "ip": "192.168.1.44", "port": 56700,
+        }],
+    }
+
+    controller = Controller(store)
+    controller.handle_figures(figures())
+
+    assert controller.state["figure"]["combo"] is True
+    assert FakeGovee.calls == [("govee", "#AAAAAA", 75)]
+    assert FakeLifx.calls == [("d073d5123456", "#FF0000", 64)]
 
 
 def test_govee_mode_does_not_also_activate_home_assistant(monkeypatch):

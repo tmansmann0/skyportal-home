@@ -1,6 +1,8 @@
 const config = window.INITIAL_CONFIG;
 const selected = new Map((config.govee.devices || []).map(device => [device.device, device]));
 let discovered = [...selected.values()];
+const selectedLifx = new Map((config.lifx?.devices || []).map(device => [device.serial, device]));
+let discoveredLifx = [...selectedLifx.values()];
 let savedSignature = null;
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -18,9 +20,22 @@ function renderDevices() {
   });
 }
 
+function renderLifxDevices() {
+  const box = $('#lifxDevices');
+  box.innerHTML = discoveredLifx.length ? '' : 'No LIFX bulbs discovered yet.';
+  discoveredLifx.forEach(device => {
+    const row = document.createElement('label');
+    row.className = 'device';
+    row.innerHTML = `<input type="checkbox" ${selectedLifx.has(device.serial) ? 'checked' : ''}><span><strong>${escapeHtml(device.label)}</strong><br><small>LIFX LAN · ${escapeHtml(device.serial.toUpperCase())} · ${escapeHtml(device.ip)}</small></span>`;
+    row.querySelector('input').onchange = event => event.target.checked ? selectedLifx.set(device.serial, device) : selectedLifx.delete(device.serial);
+    box.append(row);
+  });
+}
+
 function body() {
   return {
     govee: {api_key: $('#goveeKey').value || undefined, devices: [...selected.values()], brightness: +$('#brightness').value},
+    lifx: {devices: [...selectedLifx.values()], brightness: +$('#lifxBrightness').value},
     home_assistant: {url: $('#haUrl').value, token: $('#haToken').value || undefined},
   };
 }
@@ -28,6 +43,7 @@ const signature = () => JSON.stringify(body());
 const updateSave = () => savedSignature !== null && $('#savebar').classList.toggle('hidden', signature() === savedSignature);
 
 $('#brightness').oninput = event => { $('#brightnessLabel').textContent = `${event.target.value}%`; };
+$('#lifxBrightness').oninput = event => { $('#lifxBrightnessLabel').textContent = `${event.target.value}%`; };
 $('#discover').onclick = async () => {
   try {
     const response = await fetch('/api/govee/discover', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({api_key:$('#goveeKey').value})});
@@ -46,6 +62,17 @@ $('#discover').onclick = async () => {
     notice(`Found ${payload.devices.length} compatible device${payload.devices.length === 1 ? '' : 's'}.${sceneNote}${nameNote}`);
   } catch (error) { notice(error.message, true); }
 };
+$('#discoverLifx').onclick = async () => {
+  try {
+    const response = await fetch('/api/lifx/discover', {method:'POST'});
+    const payload = await response.json();
+    if (!payload.ok) throw Error(payload.error);
+    discoveredLifx = payload.devices;
+    discoveredLifx.forEach(device => { if (selectedLifx.has(device.serial)) selectedLifx.set(device.serial, device); });
+    renderLifxDevices();
+    notice(`Found ${payload.devices.length} LIFX bulb${payload.devices.length === 1 ? '' : 's'} on the local network.`);
+  } catch (error) { notice(error.message, true); }
+};
 $('#save').onclick = async () => {
   try {
     const response = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body())});
@@ -58,5 +85,6 @@ $('#save').onclick = async () => {
 };
 setInterval(async () => { const state = await (await fetch('/api/status')).json(); const portal = $('#portalStatus'); portal.className = `status ${state.portal}`; portal.querySelector('span').textContent = state.portal; }, 1500);
 renderDevices();
+renderLifxDevices();
 savedSignature = signature();
 setInterval(updateSave, 250);
