@@ -171,3 +171,10 @@ def test_portal_confidence_setting_is_clamped_and_persisted(tmp_path):
     assert response.status_code == 200
     assert store.data["behavior"]["portal_confidence_seconds"] == 5.0
     assert ConfigStore(store.path).data["behavior"]["portal_confidence_seconds"] == 5.0
+
+    response = web.post("/api/settings", json={
+        "behavior": {"portal_confidence_seconds": 0},
+    })
+
+    assert response.status_code == 200
+    assert store.data["behavior"]["portal_confidence_seconds"] == 0.0

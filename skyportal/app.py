@@ -112,12 +112,12 @@ def create_app(store=None, start_controller=True):
             if "portal_confidence_seconds" in behavior:
                 try:
                     behavior["portal_confidence_seconds"] = max(
-                        0.25, min(5.0, float(behavior["portal_confidence_seconds"])),
+                        0.0, min(5.0, float(behavior["portal_confidence_seconds"])),
                     )
                 except (TypeError, ValueError):
                     return jsonify({
                         "ok": False,
-                        "error": "Portal confidence must be a number from 0.25 to 5 seconds.",
+                        "error": "Portal confidence must be a number from 0 to 5 seconds.",
                     }), 400
             store.data["behavior"].update(behavior)
         history = store.data.setdefault("history", [])

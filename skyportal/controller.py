@@ -33,7 +33,7 @@ class Controller:
             configured = self.store.data.get("behavior", {}).get(
                 "portal_confidence_seconds", PORTAL_CONFIDENCE_SECONDS,
             )
-            return max(0.25, min(5.0, float(configured)))
+            return max(0.0, min(5.0, float(configured)))
         except (TypeError, ValueError):
             return PORTAL_CONFIDENCE_SECONDS
 
@@ -92,6 +92,10 @@ class Controller:
         if current != self.pending_slots:
             if self.pending_slots is not None:
                 log.warning("Portal candidate changed before confirmation: %r", self.pending_slots)
+            if confidence_seconds == 0:
+                self.pending_slots = None
+                self.pending_since = None
+                return True
             self.pending_slots = dict(current)
             self.pending_since = now
             log.info(
