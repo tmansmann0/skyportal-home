@@ -76,6 +76,19 @@ def test_stable_portal_identity_is_confirmed_after_confidence_window():
     assert controller.pending_slots is None
 
 
+def test_portal_confidence_setting_takes_effect_without_restarting_controller():
+    store = Store([])
+    controller = Controller(store)
+    controller.last_slots = {0: (15, 0)}
+
+    assert controller._transition_confirmed({0: (1, 0)}, now=20.0) is False
+    assert controller._transition_confirmed({0: (1, 0)}, now=20.5) is False
+
+    store.data["behavior"]["portal_confidence_seconds"] = 0.5
+
+    assert controller._transition_confirmed({0: (1, 0)}, now=20.5) is True
+
+
 def test_combo_splits_lights_as_evenly_as_possible(monkeypatch):
     monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
     FakeGovee.calls = []

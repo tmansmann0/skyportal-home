@@ -108,7 +108,18 @@ def create_app(store=None, start_controller=True):
         if "figure_overrides" in data:
             store.data["figure_overrides"] = data["figure_overrides"]
         if "behavior" in data:
-            store.data["behavior"].update(data["behavior"])
+            behavior = dict(data["behavior"])
+            if "portal_confidence_seconds" in behavior:
+                try:
+                    behavior["portal_confidence_seconds"] = max(
+                        0.25, min(5.0, float(behavior["portal_confidence_seconds"])),
+                    )
+                except (TypeError, ValueError):
+                    return jsonify({
+                        "ok": False,
+                        "error": "Portal confidence must be a number from 0.25 to 5 seconds.",
+                    }), 400
+            store.data["behavior"].update(behavior)
         history = store.data.setdefault("history", [])
         history.insert(0, {"at": time.time(), "event": "settings", "label": "Configuration saved", "detail": ""})
         del history[50:]

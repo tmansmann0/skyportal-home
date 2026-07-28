@@ -11,8 +11,9 @@
 - Dispose stale libusb resources so the portal can recover after a USB
   disconnect instead of remaining in an input/output error loop
 - Remove experimental DreamView group control after unreliable API behavior
-- Require portal identities to remain stable for 1.25 seconds before changing
-  palettes, while logging rejected transient readings for diagnosis
+- Require portal identities to remain stable before changing palettes, with a
+  Settings slider from 0.25–5 seconds (1.25 seconds by default), while logging
+  rejected transient readings for diagnosis
 - Add local-network LIFX discovery, settings selection, and per-bulb
   color/brightness palette output without requiring a cloud account
 

@@ -25,6 +25,8 @@ def test_settings_are_on_a_separate_authenticated_page(tmp_path):
     assert response.status_code == 200
     assert b'id="goveeKey"' in response.data
     assert b'id="haUrl"' in response.data
+    assert b'id="portalConfidence"' in response.data
+    assert b'value="1.25"' in response.data
     assert b"settings.js" in response.data
 
     dashboard = web.get("/")
@@ -155,3 +157,17 @@ def test_lifx_settings_store_only_normalized_device_metadata(tmp_path):
             "ip": "192.168.1.44", "port": 56700,
         }],
     }
+
+
+def test_portal_confidence_setting_is_clamped_and_persisted(tmp_path):
+    web, store = client(tmp_path)
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/settings", json={
+        "behavior": {"portal_confidence_seconds": 10},
+    })
+
+    assert response.status_code == 200
+    assert store.data["behavior"]["portal_confidence_seconds"] == 5.0
+    assert ConfigStore(store.path).data["behavior"]["portal_confidence_seconds"] == 5.0

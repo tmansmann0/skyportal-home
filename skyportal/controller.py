@@ -11,7 +11,7 @@ PORTAL_CONFIDENCE_SECONDS = 1.25
 
 
 class Controller:
-    def __init__(self, store, portal_factory=Portal, confidence_seconds=PORTAL_CONFIDENCE_SECONDS):
+    def __init__(self, store, portal_factory=Portal, confidence_seconds=None):
         self.store = store
         self.portal_factory = portal_factory
         self.confidence_seconds = confidence_seconds
@@ -25,6 +25,17 @@ class Controller:
             "portal": "disconnected", "figure": None, "figures": [],
             "last_error": None, "updated_at": None,
         }
+
+    def _confidence_window(self) -> float:
+        if self.confidence_seconds is not None:
+            return float(self.confidence_seconds)
+        try:
+            configured = self.store.data.get("behavior", {}).get(
+                "portal_confidence_seconds", PORTAL_CONFIDENCE_SECONDS,
+            )
+            return max(0.25, min(5.0, float(configured)))
+        except (TypeError, ValueError):
+            return PORTAL_CONFIDENCE_SECONDS
 
     def start(self):
         if not self.thread or not self.thread.is_alive():
@@ -68,6 +79,7 @@ class Controller:
 
     def _transition_confirmed(self, current: dict, now=None) -> bool:
         now = time.monotonic() if now is None else now
+        confidence_seconds = self._confidence_window()
         if current == self.last_slots:
             if self.pending_slots is not None:
                 log.warning(
@@ -84,10 +96,10 @@ class Controller:
             self.pending_since = now
             log.info(
                 "Portal change candidate; waiting %.2fs for confirmation: %r",
-                self.confidence_seconds, current,
+                confidence_seconds, current,
             )
             return False
-        if now - self.pending_since < self.confidence_seconds:
+        if now - self.pending_since < confidence_seconds:
             return False
         self.pending_slots = None
         self.pending_since = None

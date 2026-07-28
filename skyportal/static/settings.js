@@ -37,13 +37,19 @@ function body() {
     govee: {api_key: $('#goveeKey').value || undefined, devices: [...selected.values()], brightness: +$('#brightness').value},
     lifx: {devices: [...selectedLifx.values()], brightness: +$('#lifxBrightness').value},
     home_assistant: {url: $('#haUrl').value, token: $('#haToken').value || undefined},
+    behavior: {portal_confidence_seconds: +$('#portalConfidence').value},
   };
 }
 const signature = () => JSON.stringify(body());
 const updateSave = () => savedSignature !== null && $('#savebar').classList.toggle('hidden', signature() === savedSignature);
+const secondsLabel = value => {
+  const seconds = Number(value);
+  return `${seconds.toFixed(2).replace(/\.?0+$/, '')} second${seconds === 1 ? '' : 's'}`;
+};
 
 $('#brightness').oninput = event => { $('#brightnessLabel').textContent = `${event.target.value}%`; };
 $('#lifxBrightness').oninput = event => { $('#lifxBrightnessLabel').textContent = `${event.target.value}%`; };
+$('#portalConfidence').oninput = event => { $('#portalConfidenceLabel').textContent = secondsLabel(event.target.value); };
 $('#discover').onclick = async () => {
   try {
     const response = await fetch('/api/govee/discover', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({api_key:$('#goveeKey').value})});

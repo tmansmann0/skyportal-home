@@ -44,7 +44,12 @@ def default_config() -> dict:
         "recent_powerups": [],
         "history": [],
         "figure_overrides": {},
-        "behavior": {"on_remove": "leave", "remove_color": "#000000", "cooldown_seconds": 1.0},
+        "behavior": {
+            "on_remove": "leave",
+            "remove_color": "#000000",
+            "cooldown_seconds": 1.0,
+            "portal_confidence_seconds": 1.25,
+        },
     }
 
 
