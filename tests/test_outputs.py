@@ -24,6 +24,29 @@ def test_govee_rgb_conversion():
     assert session.calls[2][1]["json"]["payload"]["capability"]["value"] == 80
 
 
+def test_govee_white_uses_device_temperature_range():
+    session = Session()
+    device = {
+        "sku": "H123", "device": "AA:BB",
+        "capabilities": [{
+            "type": "devices.capabilities.color_setting",
+            "instance": "colorTemperatureK",
+            "parameters": {"range": {"min": 2700, "max": 6500, "precision": 1}},
+        }],
+    }
+
+    GoveeClient("secret", session).set_white(device, 9000, 80)
+
+    assert len(session.calls) == 3
+    temperature = session.calls[1][1]["json"]["payload"]["capability"]
+    assert temperature == {
+        "type": "devices.capabilities.color_setting",
+        "instance": "colorTemperatureK",
+        "value": 6500,
+    }
+    assert session.calls[2][1]["json"]["payload"]["capability"]["value"] == 80
+
+
 def test_govee_capability_control_powers_on_first():
     session = Session()
     capability = {"type": "devices.capabilities.dynamic_scene", "instance": "lightScene", "value": 42}
@@ -62,8 +85,9 @@ def test_govee_scene_cache_only_refreshes_when_forced():
 
 
 class LifxSocket:
-    def __init__(self, source=2):
+    def __init__(self, source=2, versioned=False):
         self.source = source
+        self.versioned = versioned
         self.calls = []
         self.responses = []
 
@@ -89,6 +113,22 @@ class LifxSocket:
         elif packet_type == LifxLanClient.GET_LABEL:
             payload = b"Kitchen Lamp\0".ljust(32, b"\0")
             self.responses.append((self.response(25, "d073d5123456", payload), ("192.168.1.44", 56700)))
+        elif packet_type == LifxLanClient.GET_VERSION and self.versioned:
+            self.responses.append((
+                self.response(
+                    LifxLanClient.STATE_VERSION, "d073d5123456",
+                    struct.pack("<II4x", 1, 27),
+                ),
+                ("192.168.1.44", 56700),
+            ))
+        elif packet_type == LifxLanClient.GET_HOST_FIRMWARE and self.versioned:
+            self.responses.append((
+                self.response(
+                    LifxLanClient.STATE_HOST_FIRMWARE, "d073d5123456",
+                    struct.pack("<Q8xHH", 0, 80, 2),
+                ),
+                ("192.168.1.44", 56700),
+            ))
 
     def recvfrom(self, _size):
         if not self.responses:
@@ -112,6 +152,38 @@ def test_lifx_lan_discovery_uses_service_port_and_reads_label():
     assert struct.unpack_from("<H", discovery_packet, 32)[0] == 2
 
 
+def test_lifx_discovery_resolves_product_temperature_range():
+    sock = LifxSocket(versioned=True)
+    registry = [{
+        "vid": 1,
+        "defaults": {"color": False, "temperature_range": None},
+        "products": [{
+            "pid": 27,
+            "name": "LIFX A19",
+            "features": {"color": True, "temperature_range": [2500, 9000]},
+            "upgrades": [{
+                "major": 2, "minor": 80,
+                "features": {"temperature_range": [1500, 9000]},
+            }],
+        }],
+    }]
+    client = LifxLanClient(
+        socket_factory=lambda *_args: sock, source=2,
+        registry_loader=lambda: registry,
+    )
+
+    devices = client.discover(timeout=0.01)
+
+    assert devices == [{
+        "serial": "d073d5123456", "label": "Kitchen Lamp",
+        "ip": "192.168.1.44", "port": 56700,
+        "vendor_id": 1, "product_id": 27,
+        "firmware_major": 2, "firmware_minor": 80,
+        "product_name": "LIFX A19", "color": True,
+        "temperature_range": [1500, 9000],
+    }]
+
+
 def test_lifx_set_color_sends_hsbk_then_power_on():
     sock = LifxSocket()
     client = LifxLanClient(socket_factory=lambda *_args: sock, source=2)
@@ -124,6 +196,22 @@ def test_lifx_set_color_sends_hsbk_then_power_on():
     assert color == (0, 21845, 65535, round(0.4 * 65535), 3500, 300)
     assert struct.unpack_from("<HI", sock.calls[1][0], 36) == (65535, 300)
     assert all(destination == ("192.168.1.44", 56700) for _, destination in sock.calls)
+
+
+def test_lifx_set_white_sends_zero_saturation_and_clamps_kelvin():
+    sock = LifxSocket()
+    client = LifxLanClient(socket_factory=lambda *_args: sock, source=2)
+    device = {
+        "serial": "d073d5123456", "label": "Kitchen",
+        "ip": "192.168.1.44", "port": 56700,
+        "temperature_range": [2700, 6500],
+    }
+
+    client.set_white(device, 9000, brightness=40, duration_ms=300)
+
+    assert [struct.unpack_from("<H", packet, 32)[0] for packet, _ in sock.calls] == [102, 117]
+    color = struct.unpack_from("<BHHHHI", sock.calls[0][0], 36)
+    assert color == (0, 0, 0, round(0.4 * 65535), 6500, 300)
 
 
 def test_lifx_device_metadata_is_strictly_normalized():

@@ -137,7 +137,7 @@ def create_app(store=None, start_controller=True):
             client = GoveeClient(key)
             devices = client.discover()
             lights = [d for d in devices if any(
-                c.get("instance") == "colorRgb"
+                c.get("instance") in ("colorRgb", "colorTemperatureK")
                 for c in d.get("capabilities", [])
             )]
             scene_errors = []

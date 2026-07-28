@@ -16,6 +16,8 @@
   rejected transient readings for diagnosis
 - Add local-network LIFX discovery, settings selection, and per-bulb
   color/brightness palette output without requiring a cloud account
+- Add native white-temperature and brightness profiles for Govee and LIFX,
+  using each discovered device's supported Kelvin range
 
 ## 1.3.0 — 2026-07-12
 

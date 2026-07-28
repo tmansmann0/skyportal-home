@@ -11,8 +11,10 @@ Designed for Raspberry Pi Zero 2 W and Raspberry Pi OS Bookworm (64-bit or 32-bi
 - 684 character and retail-variant records from Spyro's Adventure through
   Imaginators, including SWAP Force halves, vehicles, items, and crystals
 - Editable colors for Air, Earth, Fire, Life, Magic, Tech, Undead, and Water
-- Current Govee Developer API device discovery and RGB/brightness control
-- Local LIFX LAN discovery and RGB/brightness control without a cloud key
+- Current Govee Developer API discovery plus RGB, native white-temperature,
+  and brightness control
+- Local LIFX LAN discovery plus RGB, native white-temperature, and brightness
+  control without a cloud key
 - Multiple selected Govee and LIFX lights
 - Per-character color overrides
 - Per-character Home Assistant scene activation
@@ -49,15 +51,17 @@ The installer prints the dashboard address and a unique setup token. Open `http:
 1. Enter a Govee Developer API key.
 2. Select **Discover devices**.
 3. Check the lights that should react.
-4. Adjust the element colors and brightness.
+4. Adjust each light's color or white temperature and brightness.
 5. Save and place a figure on the portal.
 
 The API key is stored only in `/var/lib/skyportal-home/config.json` on the Pi and is never returned to the browser after saving.
 
 LIFX bulbs can be added from **Settings → Discover LIFX bulbs** without a
 cloud account or API key. The Pi and bulbs must be on the same LAN, and the
-network must allow local UDP broadcast traffic. Check the discovered bulbs,
-save settings, then customize them alongside Govee lights in any palette.
+network must allow local UDP broadcast traffic. The app uses LIFX's official
+product registry to match each bulb's RGB and supported white-temperature
+range. Check the discovered bulbs, save settings, then customize them alongside
+Govee lights in any palette.
 
 ## Home Assistant scenes
 

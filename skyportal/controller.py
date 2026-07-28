@@ -161,26 +161,36 @@ class Controller:
         for device in self._individual_devices():
             try:
                 output = outputs.get(device["device"], {})
+                brightness = int(output.get(
+                    "brightness",
+                    config.get("lifx", {}).get("brightness", 75)
+                    if device["provider"] == "lifx"
+                    else config["govee"]["brightness"],
+                ))
                 if device["provider"] == "lifx":
-                    lifx_client.set_color(
-                        device, output.get("color") or base_color,
-                        int(output.get(
-                            "brightness",
-                            config.get("lifx", {}).get("brightness", 75),
-                        )),
-                    )
+                    if output.get("mode") == "white":
+                        lifx_client.set_white(
+                            device, int(output.get("kelvin", 3500)), brightness,
+                        )
+                    else:
+                        lifx_client.set_color(
+                            device, output.get("color") or base_color, brightness,
+                        )
                 elif not govee_client:
                     continue
                 elif output.get("mode") in ("scene", "music") and output.get("capability"):
                     govee_client.set_capability(device, output["capability"])
+                elif output.get("mode") == "white":
+                    govee_client.set_white(
+                        device, int(output.get("kelvin", 4000)), brightness,
+                    )
                 else:
                     govee_client.set_color(
-                        device, output.get("color") or base_color,
-                        int(output.get("brightness", config["govee"]["brightness"])),
+                        device, output.get("color") or base_color, brightness,
                     )
             except Exception as exc:
                 name = device.get("deviceName") or device.get("sku") or device["device"]
-                log.exception("Govee output error for %s", name)
+                log.exception("Light output error for %s", name)
                 errors.append(f"{name}: {exc}")
         return errors
 

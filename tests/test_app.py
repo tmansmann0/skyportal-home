@@ -59,7 +59,7 @@ def test_palette_preview_endpoints(tmp_path):
     assert response.status_code == 404
 
 
-def test_discovery_includes_only_individual_color_lights(tmp_path, monkeypatch):
+def test_discovery_includes_individual_rgb_or_white_lights(tmp_path, monkeypatch):
     class FakeGovee:
         def __init__(self, api_key):
             self.api_key = api_key
@@ -75,6 +75,10 @@ def test_discovery_includes_only_individual_color_lights(tmp_path, monkeypatch):
                 {"device": "light", "sku": "H2", "capabilities": [{
                     "type": "devices.capabilities.color_setting", "instance": "colorRgb",
                 }]},
+                {"device": "white", "sku": "H4", "capabilities": [{
+                    "type": "devices.capabilities.color_setting", "instance": "colorTemperatureK",
+                    "parameters": {"range": {"min": 2700, "max": 6500, "precision": 1}},
+                }]},
                 {"device": "sensor", "sku": "H3", "capabilities": []},
             ]
 
@@ -88,7 +92,7 @@ def test_discovery_includes_only_individual_color_lights(tmp_path, monkeypatch):
 
     assert response.status_code == 200
     payload = response.get_json()
-    assert [device["device"] for device in payload["devices"]] == ["light"]
+    assert [device["device"] for device in payload["devices"]] == ["light", "white"]
     assert payload["scene_devices"] == 0
 
 
@@ -142,7 +146,12 @@ def test_lifx_settings_store_only_normalized_device_metadata(tmp_path):
             "devices": [
                 {
                     "serial": "D0:73:D5:12:34:56", "label": "Kitchen",
-                    "ip": "192.168.1.44", "port": "56700", "untrusted": "discard me",
+                    "ip": "192.168.1.44", "port": "56700",
+                    "vendor_id": 1, "product_id": 27,
+                    "firmware_major": 2, "firmware_minor": 80,
+                    "product_name": "LIFX A19", "color": True,
+                    "temperature_range": [1500, 9000],
+                    "untrusted": "discard me",
                 },
                 {"serial": "bad", "label": "Invalid", "ip": "not-an-ip", "port": 0},
             ],
@@ -155,6 +164,10 @@ def test_lifx_settings_store_only_normalized_device_metadata(tmp_path):
         "devices": [{
             "serial": "d073d5123456", "label": "Kitchen",
             "ip": "192.168.1.44", "port": 56700,
+            "vendor_id": 1, "product_id": 27,
+            "firmware_major": 2, "firmware_minor": 80,
+            "product_name": "LIFX A19", "color": True,
+            "temperature_range": [1500, 9000],
         }],
     }
 

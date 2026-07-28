@@ -31,6 +31,9 @@ class FakeGovee:
     def set_capability(self, device, capability, power_on=True):
         self.calls.append((device["device"], capability, power_on))
 
+    def set_white(self, device, kelvin, brightness):
+        self.calls.append((device["device"], "white", kelvin, brightness))
+
 
 class FakeHomeAssistant:
     calls = []
@@ -47,6 +50,9 @@ class FakeLifx:
 
     def set_color(self, device, color, brightness):
         self.calls.append((device["serial"], color, brightness))
+
+    def set_white(self, device, kelvin, brightness):
+        self.calls.append((device["serial"], "white", kelvin, brightness))
 
 
 def figures():
@@ -163,6 +169,34 @@ def test_lifx_bulbs_join_palette_outputs_and_combo_counts(monkeypatch):
     assert controller.state["figure"]["combo"] is True
     assert FakeGovee.calls == [("govee", "#AAAAAA", 75)]
     assert FakeLifx.calls == [("d073d5123456", "#FF0000", 64)]
+
+
+def test_white_profiles_dispatch_native_govee_and_lifx_temperature(monkeypatch):
+    monkeypatch.setattr(controller_module, "GoveeClient", FakeGovee)
+    monkeypatch.setattr(controller_module, "LifxLanClient", FakeLifx)
+    FakeGovee.calls = []
+    FakeLifx.calls = []
+    store = Store([{
+        "device": "govee",
+        "capabilities": [{"instance": "colorTemperatureK"}],
+    }])
+    store.data["lifx"] = {
+        "brightness": 64,
+        "devices": [{
+            "serial": "d073d5123456", "label": "Desk",
+            "ip": "192.168.1.44", "port": 56700,
+            "temperature_range": [2500, 9000],
+        }],
+    }
+    store.data["element_outputs"] = {"air": {
+        "govee": {"mode": "white", "kelvin": 4200, "brightness": 55},
+        "lifx:d073d5123456": {"mode": "white", "kelvin": 3200, "brightness": 45},
+    }}
+
+    Controller(store).handle_figure(1, figure=figures()[0])
+
+    assert FakeGovee.calls == [("govee", "white", 4200, 55)]
+    assert FakeLifx.calls == [("d073d5123456", "white", 3200, 45)]
 
 
 def test_govee_mode_does_not_also_activate_home_assistant(monkeypatch):
