@@ -1,6 +1,6 @@
 # SkyPortal Home
 
-Turn an original USB Skylanders Portal of Power into a physical smart-home controller. Place a figure on the portal and selected Govee or LIFX lights take on its elemental color. Specific figures can override that color and activate Home Assistant scenes.
+Turn an original USB Skylanders Portal of Power into a physical smart-home controller. Place a figure on the portal and selected Govee, LIFX, or WLED lights take on its elemental color. Specific figures can override that color and activate Home Assistant scenes.
 
 Designed for Raspberry Pi Zero 2 W and Raspberry Pi OS Bookworm (64-bit or 32-bit).
 
@@ -15,7 +15,9 @@ Designed for Raspberry Pi Zero 2 W and Raspberry Pi OS Bookworm (64-bit or 32-bi
   and brightness control
 - Local LIFX LAN discovery plus RGB, native white-temperature, and brightness
   control without a cloud key
-- Multiple selected Govee and LIFX lights
+- Local WLED discovery for ESP32/ESP8266 controllers, including RGB, RGBW/CCT,
+  brightness, multi-segment output, and named presets
+- Multiple selected Govee, LIFX, and WLED lights
 - Per-character color overrides
 - Per-character Home Assistant scene activation
 - Per-element light profiles with individual colors, brightness, scenes, and
@@ -63,6 +65,13 @@ product registry to match each bulb's RGB and supported white-temperature
 range. Check the discovered bulbs, save settings, then customize them alongside
 Govee lights in any palette.
 
+WLED controllers can be added from **Settings → Discover WLED devices** using
+their `_wled._tcp` mDNS advertisement. If multicast discovery is unavailable,
+enter the controller's `.local` hostname or private IP address and choose
+**Add by address**. The app reads the controller's segment capabilities and
+named `/presets.json` entries, then offers compatible RGB, native white/CCT,
+brightness, and preset controls in every palette.
+
 ## Home Assistant scenes
 
 Create a [long-lived access token](https://developers.home-assistant.io/docs/auth_api/#long-lived-access-token), enter the Home Assistant URL and token, and add an override such as:
@@ -105,7 +114,7 @@ Skylander IDs compilation. Its source revision and license are preserved in
 
 ## Protocol notes and attribution
 
-The portal protocol implementation is an independent Python implementation informed by the MIT-licensed [SkylandersToolkit](https://github.com/mandar1jn/SkylandersToolkit) project by Marijn Kneppers. Figure IDs are based on the community-maintained [Skylander IDs](https://github.com/Texthead1/Skylander-IDs) reference. Skylanders and related names are trademarks of their respective owners. This project is unofficial and is not affiliated with Activision or Govee.
+The portal protocol implementation is an independent Python implementation informed by the MIT-licensed [SkylandersToolkit](https://github.com/mandar1jn/SkylandersToolkit) project by Marijn Kneppers. Figure IDs are based on the community-maintained [Skylander IDs](https://github.com/Texthead1/Skylander-IDs) reference. Skylanders and related names are trademarks of their respective owners. This project is unofficial and is not affiliated with Activision, Govee, LIFX, or the WLED project.
 
 ## Security
 

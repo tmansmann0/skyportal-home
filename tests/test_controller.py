@@ -55,6 +55,19 @@ class FakeLifx:
         self.calls.append((device["serial"], "white", kelvin, brightness))
 
 
+class FakeWled:
+    calls = []
+
+    def set_color(self, device, color, brightness):
+        self.calls.append((device["id"], "color", color, brightness))
+
+    def set_white(self, device, kelvin, brightness):
+        self.calls.append((device["id"], "white", kelvin, brightness))
+
+    def set_preset(self, device, preset_id):
+        self.calls.append((device["id"], "preset", preset_id))
+
+
 def figures():
     return [
         {"id": 1, "variant_id": 0, "name": "Air One", "element": "air"},
@@ -197,6 +210,33 @@ def test_white_profiles_dispatch_native_govee_and_lifx_temperature(monkeypatch):
 
     assert FakeGovee.calls == [("govee", "white", 4200, 55)]
     assert FakeLifx.calls == [("d073d5123456", "white", 3200, 45)]
+
+
+def test_wled_devices_dispatch_color_white_and_presets(monkeypatch):
+    monkeypatch.setattr(controller_module, "WledClient", FakeWled)
+    FakeWled.calls = []
+    store = Store([])
+    store.data["wled"] = {
+        "brightness": 70,
+        "devices": [
+            {"id": "rgb", "name": "RGB", "address": "192.168.1.80"},
+            {"id": "white", "name": "White", "address": "192.168.1.81"},
+            {"id": "preset", "name": "Preset", "address": "192.168.1.82"},
+        ],
+    }
+
+    errors = Controller(store)._apply_outputs("#123456", {
+        "wled:rgb": {"mode": "color", "brightness": 30},
+        "wled:white": {"mode": "white", "kelvin": 4200, "brightness": 45},
+        "wled:preset": {"mode": "preset", "preset": 7},
+    })
+
+    assert errors == []
+    assert FakeWled.calls == [
+        ("rgb", "color", "#123456", 30),
+        ("white", "white", 4200, 45),
+        ("preset", "preset", 7),
+    ]
 
 
 def test_govee_mode_does_not_also_activate_home_assistant(monkeypatch):

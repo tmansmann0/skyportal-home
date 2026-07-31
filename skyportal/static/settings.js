@@ -3,6 +3,8 @@ const selected = new Map((config.govee.devices || []).map(device => [device.devi
 let discovered = [...selected.values()];
 const selectedLifx = new Map((config.lifx?.devices || []).map(device => [device.serial, device]));
 let discoveredLifx = [...selectedLifx.values()];
+const selectedWled = new Map((config.wled?.devices || []).map(device => [device.id, device]));
+let discoveredWled = [...selectedWled.values()];
 let savedSignature = null;
 const $ = selector => document.querySelector(selector);
 const escapeHtml = value => String(value).replace(/[&<>'"]/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -32,10 +34,34 @@ function renderLifxDevices() {
   });
 }
 
+function renderWledDevices() {
+  const box = $('#wledDevices');
+  box.innerHTML = discoveredWled.length ? '' : 'No WLED devices discovered yet.';
+  discoveredWled.forEach(device => {
+    const row = document.createElement('label');
+    const modes = [device.rgb ? 'RGB' : '', device.cct ? 'CCT' : device.white ? 'white channel' : ''].filter(Boolean).join(' + ');
+    row.className = 'device';
+    row.innerHTML = `<input type="checkbox" ${selectedWled.has(device.id) ? 'checked' : ''}><span><strong>${escapeHtml(device.name)}</strong><br><small>WLED ${escapeHtml(device.version || '')} · ${escapeHtml(device.arch?.toUpperCase() || 'ESP')} · ${escapeHtml(device.address)} · ${escapeHtml(modes || 'presets')}</small></span>`;
+    row.querySelector('input').onchange = event => event.target.checked ? selectedWled.set(device.id, device) : selectedWled.delete(device.id);
+    box.append(row);
+  });
+}
+
+function mergeWledDevices(devices) {
+  const merged = new Map(discoveredWled.map(device => [device.id, device]));
+  devices.forEach(device => {
+    merged.set(device.id, device);
+    if (selectedWled.has(device.id)) selectedWled.set(device.id, device);
+  });
+  discoveredWled = [...merged.values()].sort((left, right) => left.name.localeCompare(right.name));
+  renderWledDevices();
+}
+
 function body() {
   return {
     govee: {api_key: $('#goveeKey').value || undefined, devices: [...selected.values()], brightness: +$('#brightness').value},
     lifx: {devices: [...selectedLifx.values()], brightness: +$('#lifxBrightness').value},
+    wled: {devices: [...selectedWled.values()], brightness: +$('#wledBrightness').value},
     home_assistant: {url: $('#haUrl').value, token: $('#haToken').value || undefined},
     behavior: {portal_confidence_seconds: +$('#portalConfidence').value},
   };
@@ -49,6 +75,7 @@ const secondsLabel = value => {
 
 $('#brightness').oninput = event => { $('#brightnessLabel').textContent = `${event.target.value}%`; };
 $('#lifxBrightness').oninput = event => { $('#lifxBrightnessLabel').textContent = `${event.target.value}%`; };
+$('#wledBrightness').oninput = event => { $('#wledBrightnessLabel').textContent = `${event.target.value}%`; };
 $('#portalConfidence').oninput = event => { $('#portalConfidenceLabel').textContent = secondsLabel(event.target.value); };
 $('#discover').onclick = async () => {
   try {
@@ -79,6 +106,33 @@ $('#discoverLifx').onclick = async () => {
     notice(`Found ${payload.devices.length} LIFX bulb${payload.devices.length === 1 ? '' : 's'} on the local network.`);
   } catch (error) { notice(error.message, true); }
 };
+$('#discoverWled').onclick = async () => {
+  try {
+    const response = await fetch('/api/wled/discover', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({addresses:[...selectedWled.values()].map(device => device.address)}),
+    });
+    const payload = await response.json();
+    if (!payload.ok) throw Error(payload.error);
+    mergeWledDevices(payload.devices);
+    notice(`Found ${payload.devices.length} WLED device${payload.devices.length === 1 ? '' : 's'} on the local network.`);
+  } catch (error) { notice(error.message, true); }
+};
+$('#addWled').onclick = async () => {
+  try {
+    const address = $('#wledAddress').value.trim();
+    if (!address) throw Error('Enter a WLED hostname or IP address first.');
+    const response = await fetch('/api/wled/discover', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({address}),
+    });
+    const payload = await response.json();
+    if (!payload.ok) throw Error(payload.error);
+    mergeWledDevices(payload.devices);
+    $('#wledAddress').value = '';
+    notice(`Added ${payload.devices[0]?.name || 'WLED device'}. Select it and save settings.`);
+  } catch (error) { notice(error.message, true); }
+};
 $('#save').onclick = async () => {
   try {
     const response = await fetch('/api/settings', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body())});
@@ -92,5 +146,6 @@ $('#save').onclick = async () => {
 setInterval(async () => { const state = await (await fetch('/api/status')).json(); const portal = $('#portalStatus'); portal.className = `status ${state.portal}`; portal.querySelector('span').textContent = state.portal; }, 1500);
 renderDevices();
 renderLifxDevices();
+renderWledDevices();
 savedSignature = signature();
 setInterval(updateSave, 250);

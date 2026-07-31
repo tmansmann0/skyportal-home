@@ -3,7 +3,7 @@ import threading
 import time
 
 from .figures import identify, identify_all_present
-from .outputs import GoveeClient, HomeAssistantClient, LifxLanClient
+from .outputs import GoveeClient, HomeAssistantClient, LifxLanClient, WledClient
 from .portal import Portal
 
 log = logging.getLogger(__name__)
@@ -148,7 +148,17 @@ class Controller:
             }
             for device in self.store.data.get("lifx", {}).get("devices", [])
         ]
-        return [*govee, *lifx]
+        wled = [
+            {
+                **device,
+                "provider": "wled",
+                "device": f"wled:{device['id']}",
+                "deviceName": device.get("name") or "WLED device",
+                "sku": "WLED LAN",
+            }
+            for device in self.store.data.get("wled", {}).get("devices", [])
+        ]
+        return [*govee, *lifx, *wled]
 
     def _apply_outputs(self, base_color: str, outputs: dict):
         config = self.store.data
@@ -157,17 +167,29 @@ class Controller:
             if config["govee"]["api_key"] else None
         )
         lifx_client = LifxLanClient()
+        wled_client = WledClient()
         errors = []
         for device in self._individual_devices():
             try:
                 output = outputs.get(device["device"], {})
                 brightness = int(output.get(
                     "brightness",
-                    config.get("lifx", {}).get("brightness", 75)
-                    if device["provider"] == "lifx"
-                    else config["govee"]["brightness"],
+                    config.get(device["provider"], {}).get("brightness", 75),
                 ))
-                if device["provider"] == "lifx":
+                if device["provider"] == "wled":
+                    if output.get("mode") == "preset":
+                        wled_client.set_preset(device, int(output.get("preset", 1)))
+                    elif output.get("mode") == "white" or (
+                        not device.get("rgb", True) and device.get("white", False)
+                    ):
+                        wled_client.set_white(
+                            device, int(output.get("kelvin", 4000)), brightness,
+                        )
+                    else:
+                        wled_client.set_color(
+                            device, output.get("color") or base_color, brightness,
+                        )
+                elif device["provider"] == "lifx":
                     if output.get("mode") == "white":
                         lifx_client.set_white(
                             device, int(output.get("kelvin", 3500)), brightness,

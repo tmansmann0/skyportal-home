@@ -7,7 +7,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from .config import ConfigStore
 from .controller import Controller
 from .figures import CHARACTERS, ELEMENT_COLORS, FIGURES, POWER_UPS
-from .outputs import GoveeClient, GoveeSceneCache, LifxLanClient
+from .outputs import GoveeClient, GoveeSceneCache, LifxLanClient, WledClient
 
 
 def create_app(store=None, start_controller=True):
@@ -61,6 +61,7 @@ def create_app(store=None, start_controller=True):
         data = request.get_json(force=True)
         govee = data.get("govee", {})
         lifx = data.get("lifx", {})
+        wled = data.get("wled", {})
         ha = data.get("home_assistant", {})
         if govee.get("api_key") and govee["api_key"] != "configured":
             store.data["govee"]["api_key"] = govee["api_key"].strip()
@@ -78,6 +79,16 @@ def create_app(store=None, start_controller=True):
             store.data["lifx"]["devices"] = normalized_lifx
         if "brightness" in lifx:
             store.data["lifx"]["brightness"] = max(1, min(100, int(lifx["brightness"])))
+        if "devices" in wled:
+            normalized_wled = []
+            for device in wled["devices"]:
+                try:
+                    normalized_wled.append(WledClient.normalize_device(device))
+                except Exception:
+                    continue
+            store.data["wled"]["devices"] = normalized_wled
+        if "brightness" in wled:
+            store.data["wled"]["brightness"] = max(1, min(100, int(wled["brightness"])))
         if "element_colors" in data:
             for element in ELEMENT_COLORS:
                 value = data["element_colors"].get(element)
@@ -165,6 +176,21 @@ def create_app(store=None, start_controller=True):
     def discover_lifx():
         try:
             return jsonify({"ok": True, "devices": LifxLanClient().discover()})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.post("/api/wled/discover")
+    @authenticated
+    def discover_wled():
+        candidate = request.get_json(silent=True) or {}
+        addresses = candidate.get("addresses", [])
+        if not isinstance(addresses, list):
+            addresses = []
+        try:
+            devices = WledClient().discover(
+                addresses=addresses[:32], address=candidate.get("address"),
+            )
+            return jsonify({"ok": True, "devices": devices})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
 

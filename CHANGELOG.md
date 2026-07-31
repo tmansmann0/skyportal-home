@@ -18,6 +18,8 @@
   color/brightness palette output without requiring a cloud account
 - Add native white-temperature and brightness profiles for Govee and LIFX,
   using each discovered device's supported Kelvin range
+- Add local ESP32/ESP8266 WLED support with mDNS/manual discovery, RGB,
+  RGBW/CCT white, brightness, all-segment output, and named presets
 
 ## 1.3.0 — 2026-07-12
 

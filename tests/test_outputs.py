@@ -1,7 +1,7 @@
 import socket
 import struct
 
-from skyportal.outputs import GoveeClient, GoveeSceneCache, LifxLanClient, OutputError
+from skyportal.outputs import GoveeClient, GoveeSceneCache, LifxLanClient, OutputError, WledClient
 
 
 class Response:
@@ -229,3 +229,103 @@ def test_lifx_device_metadata_is_strictly_normalized():
         pass
     else:
         raise AssertionError("invalid metadata should be rejected")
+
+
+class WledResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self): pass
+
+    def json(self): return self.payload
+
+
+class WledSession:
+    def __init__(self):
+        self.calls = []
+
+    def get(self, url, **kwargs):
+        self.calls.append(("get", url, kwargs))
+        if url.endswith("/presets.json"):
+            return WledResponse({"1": {"n": "Fireplace"}, "7": {"n": "Party"}, "0": {}})
+        return WledResponse({
+            "state": {"seg": [{"id": 0}, {"id": 1}]},
+            "info": {
+                "ver": "0.15.3", "name": "Desk WLED", "ip": "192.168.1.88",
+                "mac": "AABBCCDDEEFF", "arch": "esp32",
+                "leds": {"count": 120, "lc": 1, "seglc": [7, 1]},
+            },
+        })
+
+    def post(self, url, **kwargs):
+        self.calls.append(("post", url, kwargs))
+        return WledResponse({"success": True})
+
+
+def test_wled_probe_reads_capabilities_segments_and_presets():
+    session = WledSession()
+
+    device = WledClient(session).probe("192.168.1.88")
+
+    assert device == {
+        "id": "aabbccddeeff", "name": "Desk WLED", "address": "192.168.1.88",
+        "mac": "aabbccddeeff", "version": "0.15.3", "arch": "esp32",
+        "led_count": 120, "rgb": True, "white": True, "cct": True,
+        "segments": [{"id": 0, "lc": 7}, {"id": 1, "lc": 1}],
+        "presets": [{"id": 1, "name": "Fireplace"}, {"id": 7, "name": "Party"}],
+    }
+
+
+def test_wled_color_and_cct_white_use_native_json_controls():
+    session = WledSession()
+    client = WledClient(session)
+    device = {
+        "id": "aabbccddeeff", "name": "Desk WLED", "address": "192.168.1.88",
+        "rgb": True, "white": True, "cct": True,
+        "segments": [{"id": 0, "lc": 7}, {"id": 1, "lc": 1}],
+    }
+
+    client.set_color(device, "#12ABEF", 40)
+    client.set_white(device, 6500, 60)
+
+    color = session.calls[0][2]["json"]
+    assert color == {
+        "on": True, "bri": 102, "tt": 3,
+        "seg": [
+            {"id": 0, "fx": 0, "col": [[18, 171, 239, 0]]},
+            {"id": 1, "fx": 0, "col": [[18, 171, 239, 0]]},
+        ],
+    }
+    white = session.calls[1][2]["json"]
+    assert white == {
+        "on": True, "bri": 153, "tt": 3,
+        "seg": [{"id": 0, "fx": 0, "cct": 255, "col": [[0, 0, 0, 255]]}],
+    }
+
+
+def test_wled_preset_uses_saved_preset_id():
+    session = WledSession()
+    client = WledClient(session)
+
+    client.set_preset({"id": "one", "address": "wled.local"}, 7)
+
+    assert session.calls[0][1] == "http://wled.local/json/state"
+    assert session.calls[0][2]["json"] == {"on": True, "ps": 7}
+
+
+def test_wled_normalization_rejects_nonlocal_ip():
+    try:
+        WledClient.normalize_device({"address": "8.8.8.8"})
+    except OutputError:
+        pass
+    else:
+        raise AssertionError("public WLED addresses should be rejected")
+
+
+def test_wled_saved_address_refresh_survives_mdns_failure(monkeypatch):
+    client = WledClient(WledSession())
+    monkeypatch.setattr(client, "_mdns_addresses", lambda _timeout: (_ for _ in ()).throw(OSError("mDNS blocked")))
+
+    devices = client.discover(addresses=["192.168.1.88"])
+
+    assert [device["name"] for device in devices] == ["Desk WLED"]

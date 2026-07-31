@@ -1,6 +1,7 @@
 const config = window.INITIAL_CONFIG;
 const selected = new Map((config.govee.devices || []).map(device => [device.device, device]));
 const selectedLifx = new Map((config.lifx?.devices || []).map(device => [device.serial, device]));
+const selectedWled = new Map((config.wled?.devices || []).map(device => [device.id, device]));
 let elementOutputs = structuredClone(config.element_outputs || {});
 let elementActions = structuredClone(config.element_actions || {});
 let elementCombos = structuredClone(config.element_combos || {});
@@ -50,7 +51,34 @@ function individualDevices() {
       capabilities,
     };
   });
-  return [...govee, ...lifx];
+  const wled = [...selectedWled.values()].map(device => {
+    const capabilities = [];
+    if (device.rgb) capabilities.push({type: 'wled.color', instance: 'colorRgb'});
+    if (device.cct) capabilities.push({
+      type: 'wled.color', instance: 'colorTemperatureK',
+      parameters: {range: {min: 2700, max: 6500, precision: 50}},
+    });
+    else if (device.white) capabilities.push({type: 'wled.color', instance: 'whiteChannel'});
+    return {
+      ...device,
+      provider: 'wled',
+      device: `wled:${device.id}`,
+      deviceName: device.name,
+      sku: 'WLED LAN',
+      capabilities,
+    };
+  });
+  return [...govee, ...lifx, ...wled];
+}
+
+function defaultBrightness(device) {
+  return config[device.provider]?.brightness ?? 75;
+}
+
+function providerLabel(device) {
+  if (device.provider === 'lifx') return 'LIFX LAN';
+  if (device.provider === 'wled') return `${device.arch?.toUpperCase() || 'ESP'} · WLED ${device.version || ''}`;
+  return device.sku;
 }
 
 function namedCollection(kind) {
@@ -111,7 +139,7 @@ function profileFor(device, deviceIndex) {
   else outputs = (elementOutputs[activeElement] ||= {});
   outputs[device.device] ||= {
     mode: 'color', color: activeColor(deviceIndex),
-    brightness: device.provider === 'lifx' ? config.lifx.brightness : config.govee.brightness,
+    brightness: defaultBrightness(device),
   };
   return outputs[device.device];
 }
@@ -136,7 +164,7 @@ function renderPaletteAutomation() {
     const devices = $('#customizeDevices');
     devices.classList.toggle('hidden', action.action_mode !== 'govee');
     if (action.action_mode === 'govee') {
-      panel.innerHTML = '<strong>Individual light controls</strong><span>Each selected Govee or LIFX light can use a color or native white temperature with its own brightness. Compatible Govee lights may also use scenes or music mode.</span>';
+      panel.innerHTML = '<strong>Individual light controls</strong><span>Each selected Govee, LIFX, or WLED light can use color or native white with its own brightness. Compatible devices may also use Govee scenes/music or WLED presets.</span>';
       renderCustomizeDevices();
     } else {
       panel.innerHTML = `<label>Home Assistant scene<input id="paletteHaScene" placeholder="scene.portal_action" value="${escapeHtml(action.ha_scene || '')}"></label><span>Only this Home Assistant scene will run.</span>`;
@@ -163,7 +191,7 @@ function musicValue(device, profile) {
 
 function whiteRange(device) {
   const range = capability(device, 'colorTemperatureK')?.parameters?.range || {};
-  const fallback = device.provider === 'lifx' ? [1500, 9000] : [2000, 9000];
+  const fallback = device.provider === 'lifx' ? [1500, 9000] : device.provider === 'wled' ? [2700, 6500] : [2000, 9000];
   const minimum = Number.isFinite(Number(range.min)) ? Number(range.min) : fallback[0];
   const maximum = Number.isFinite(Number(range.max)) ? Number(range.max) : fallback[1];
   return {
@@ -224,24 +252,26 @@ function renderCustomizeDevices() {
   const devices = individualDevices();
   box.innerHTML = '';
   if (!devices.length) {
-    box.innerHTML = '<div class="empty-state">Select at least one Govee or LIFX light first.</div>';
+    box.innerHTML = '<div class="empty-state">Select at least one Govee, LIFX, or WLED light first.</div>';
     return;
   }
   devices.forEach((device, deviceIndex) => {
     const profile = profileFor(device, deviceIndex);
     const supportsColor = !!capability(device, 'colorRgb');
-    const supportsWhite = !!capability(device, 'colorTemperatureK');
+    const supportsWhite = !!(capability(device, 'colorTemperatureK') || capability(device, 'whiteChannel'));
     const supportsScene = !!(capability(device, 'lightScene') || capability(device, 'diyScene'));
     const music = capability(device, 'musicMode');
+    const presets = device.provider === 'wled' ? (device.presets || []) : [];
     const card = document.createElement('article');
     card.className = 'light-profile';
     const modes = [];
     if (supportsColor) modes.push('<option value="color">Individual color</option>');
-    if (supportsWhite) modes.push('<option value="white">White temperature</option>');
+    if (supportsWhite) modes.push(`<option value="white">${capability(device, 'colorTemperatureK') ? 'White temperature' : 'White channel'}</option>`);
     if (supportsScene) modes.push('<option value="scene">Govee scene</option>');
     if (music) modes.push('<option value="music">Music mode</option>');
+    if (presets.length) modes.push('<option value="preset">WLED preset</option>');
     if (!modes.length) modes.push('<option value="color">Individual color</option>');
-    card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(device.provider === 'lifx' ? 'LIFX LAN' : device.sku)}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
+    card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(providerLabel(device))}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
     const mode = card.querySelector('.profile-mode');
     const supportedModes = [...mode.options].map(option => option.value);
     mode.value = supportedModes.includes(profile.mode) ? profile.mode : supportedModes[0];
@@ -252,22 +282,27 @@ function renderCustomizeDevices() {
       controls.innerHTML = '';
       profile.mode = mode.value;
       if (profile.mode === 'color') {
-        const defaultBrightness = device.provider === 'lifx' ? config.lifx.brightness : config.govee.brightness;
-        controls.innerHTML = `<label>Color<input class="profile-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label>Brightness <span>${profile.brightness || defaultBrightness}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || defaultBrightness}"></label>`;
+        const brightnessDefault = defaultBrightness(device);
+        controls.innerHTML = `<label>Color<input class="profile-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label>Brightness <span>${profile.brightness || brightnessDefault}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || brightnessDefault}"></label>`;
         controls.querySelector('.profile-color').oninput = event => { profile.color = event.target.value.toUpperCase(); };
         const brightness = controls.querySelector('.profile-brightness');
         brightness.oninput = event => { profile.brightness = +event.target.value; event.target.previousElementSibling.textContent = `${event.target.value}%`; };
       } else if (profile.mode === 'white') {
-        const range = whiteRange(device);
-        const defaultBrightness = device.provider === 'lifx' ? config.lifx.brightness : config.govee.brightness;
-        const defaultKelvin = Math.max(range.min, Math.min(range.max, profile.kelvin ?? (device.provider === 'lifx' ? 3500 : 4000)));
-        profile.kelvin = defaultKelvin;
-        controls.innerHTML = `<label>White temperature <span>${defaultKelvin} K</span><input class="profile-temperature" type="range" min="${range.min}" max="${range.max}" step="${range.step}" value="${defaultKelvin}" ${range.min === range.max ? 'disabled' : ''}><small>Warm ${range.min} K · Cool ${range.max} K</small></label><label>Brightness <span>${profile.brightness || defaultBrightness}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || defaultBrightness}"></label>`;
-        const temperature = controls.querySelector('.profile-temperature');
-        temperature.oninput = event => {
-          profile.kelvin = +event.target.value;
-          event.target.previousElementSibling.textContent = `${event.target.value} K`;
-        };
+        const brightnessDefault = defaultBrightness(device);
+        const temperatureCapability = capability(device, 'colorTemperatureK');
+        if (temperatureCapability) {
+          const range = whiteRange(device);
+          const defaultKelvin = Math.max(range.min, Math.min(range.max, profile.kelvin ?? (device.provider === 'lifx' ? 3500 : 4000)));
+          profile.kelvin = defaultKelvin;
+          controls.innerHTML = `<label>White temperature <span>${defaultKelvin} K</span><input class="profile-temperature" type="range" min="${range.min}" max="${range.max}" step="${range.step}" value="${defaultKelvin}" ${range.min === range.max ? 'disabled' : ''}><small>Warm ${range.min} K · Cool ${range.max} K</small></label><label>Brightness <span>${profile.brightness || brightnessDefault}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || brightnessDefault}"></label>`;
+          const temperature = controls.querySelector('.profile-temperature');
+          temperature.oninput = event => {
+            profile.kelvin = +event.target.value;
+            event.target.previousElementSibling.textContent = `${event.target.value} K`;
+          };
+        } else {
+          controls.innerHTML = `<div class="white-channel-note"><strong>Dedicated white channel</strong><small>This WLED setup exposes white intensity without adjustable color temperature.</small></div><label>Brightness <span>${profile.brightness || brightnessDefault}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || brightnessDefault}"></label>`;
+        }
         const brightness = controls.querySelector('.profile-brightness');
         brightness.oninput = event => {
           profile.brightness = +event.target.value;
@@ -276,6 +311,13 @@ function renderCustomizeDevices() {
       } else if (profile.mode === 'scene') {
         controls.innerHTML = '<label>Scene<select class="profile-scene"></select></label>';
         loadScenes(device, controls.querySelector('.profile-scene'), profile);
+      } else if (profile.mode === 'preset') {
+        const selectedPreset = profile.preset ?? presets[0].id;
+        profile.preset = +selectedPreset;
+        controls.innerHTML = `<label>Preset<select class="wled-preset">${presets.map(preset => `<option value="${preset.id}">${escapeHtml(preset.name)}</option>`).join('')}</select></label><div class="white-channel-note"><strong>Stored on WLED</strong><small>The preset controls its saved segments, effects, colors, and optional brightness.</small></div>`;
+        const preset = controls.querySelector('.wled-preset');
+        preset.value = selectedPreset;
+        preset.onchange = event => { profile.preset = +event.target.value; };
       } else if (profile.mode === 'music') {
         const fields = music.parameters?.fields || [];
         const options = fields.find(field => field.fieldName === 'musicMode')?.options || [];

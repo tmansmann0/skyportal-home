@@ -1,12 +1,15 @@
 import colorsys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import ipaddress
 import logging
 import os
+import re
 import socket
 import struct
 import threading
 import time
 import uuid
+from urllib.parse import urlsplit
 
 import requests
 
@@ -426,6 +429,280 @@ class LifxLanClient:
         minimum, maximum = temperature_range
         kelvin = max(minimum, min(maximum, int(kelvin)))
         self._set_hsbk(normalized, 0, 0, brightness, kelvin, duration_ms)
+
+
+class WledClient:
+    """Local WLED JSON API client with mDNS and manual-address discovery."""
+
+    SERVICE_TYPE = "_wled._tcp.local."
+
+    def __init__(self, session=None):
+        self.session = session or requests.Session()
+
+    @staticmethod
+    def normalize_address(address: str) -> str:
+        raw = str(address or "").strip()
+        if not raw:
+            raise OutputError("Enter a WLED hostname or IP address")
+        parsed = urlsplit(raw if "://" in raw else f"http://{raw}")
+        if (
+            parsed.scheme.lower() != "http" or not parsed.hostname
+            or parsed.username or parsed.password
+            or parsed.path not in ("", "/") or parsed.query or parsed.fragment
+        ):
+            raise OutputError("WLED address must be a local HTTP hostname or IP address")
+        hostname = parsed.hostname.lower().rstrip(".")
+        try:
+            address_value = ipaddress.ip_address(hostname)
+            if not (address_value.is_private or address_value.is_link_local or address_value.is_loopback):
+                raise OutputError("WLED IP address must be on the local network")
+            hostname = str(address_value)
+        except ValueError:
+            if not re.fullmatch(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?", hostname):
+                raise OutputError("WLED hostname is invalid")
+        try:
+            port = parsed.port or 80
+        except ValueError as exc:
+            raise OutputError("WLED port is invalid") from exc
+        if not 1 <= port <= 65535:
+            raise OutputError("WLED port is invalid")
+        return hostname if port == 80 else f"{hostname}:{port}"
+
+    @classmethod
+    def normalize_device(cls, device: dict) -> dict:
+        address = cls.normalize_address(device.get("address", ""))
+        mac = re.sub(r"[^0-9a-f]", "", str(device.get("mac", "")).lower())
+        if len(mac) != 12:
+            mac = ""
+        identifier = mac or str(device.get("id") or address).strip()[:80]
+        name = str(device.get("name") or f"WLED {identifier[-6:].upper()}").strip()[:80]
+        normalized = {
+            "id": identifier,
+            "name": name,
+            "address": address,
+            "mac": mac,
+            "version": str(device.get("version") or "")[:32],
+            "arch": str(device.get("arch") or "")[:32],
+            "led_count": max(0, min(100000, int(device.get("led_count", 0) or 0))),
+            "rgb": bool(device.get("rgb", True)),
+            "white": bool(device.get("white", False)),
+            "cct": bool(device.get("cct", False)),
+        }
+        segments = []
+        for segment in device.get("segments", []):
+            try:
+                segment_id = int(segment.get("id"))
+                light_capabilities = max(0, min(255, int(segment.get("lc", 0))))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if 0 <= segment_id <= 255 and segment_id not in [item["id"] for item in segments]:
+                segments.append({"id": segment_id, "lc": light_capabilities})
+        normalized["segments"] = segments or [{"id": 0, "lc": 0}]
+        presets = []
+        for preset in device.get("presets", []):
+            try:
+                preset_id = int(preset.get("id"))
+            except (AttributeError, TypeError, ValueError):
+                continue
+            if 1 <= preset_id <= 250:
+                presets.append({
+                    "id": preset_id,
+                    "name": str(preset.get("name") or f"Preset {preset_id}")[:80],
+                })
+        normalized["presets"] = sorted(presets, key=lambda item: item["id"])
+        return normalized
+
+    @staticmethod
+    def _brightness(value: int) -> int:
+        return max(1, min(255, round(int(value) * 255 / 100)))
+
+    @staticmethod
+    def _segment_updates(device: dict, capability_bit: int, values: dict) -> list[dict]:
+        updates = []
+        for segment in device.get("segments", []) or [{"id": 0, "lc": 0}]:
+            capabilities = int(segment.get("lc", 0))
+            if capabilities and not capabilities & capability_bit:
+                continue
+            updates.append({"id": int(segment.get("id", 0)), **values})
+        if not updates:
+            raise OutputError("No WLED segments support this light mode")
+        return updates
+
+    def _post_state(self, device: dict, state: dict):
+        device = self.normalize_device(device)
+        response = self.session.post(
+            f"http://{device['address']}/json/state", json=state, timeout=5,
+        )
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("error"):
+            raise OutputError(str(payload["error"]))
+
+    def set_color(self, device: dict, hex_color: str, brightness: int = 75):
+        value = hex_color.strip().lstrip("#")
+        if len(value) != 6:
+            raise OutputError("WLED color must be a six-digit hexadecimal color")
+        try:
+            red, green, blue = (int(value[index:index + 2], 16) for index in (0, 2, 4))
+        except ValueError as exc:
+            raise OutputError("WLED color must be a six-digit hexadecimal color") from exc
+        device = self.normalize_device(device)
+        segments = self._segment_updates(
+            device, 1, {"fx": 0, "col": [[red, green, blue, 0]]},
+        )
+        self._post_state(device, {
+            "on": True, "bri": self._brightness(brightness), "tt": 3,
+            "seg": segments,
+        })
+
+    def set_white(self, device: dict, kelvin: int = 4000, brightness: int = 75):
+        device = self.normalize_device(device)
+        if device["cct"]:
+            kelvin = max(2700, min(6500, int(kelvin)))
+            relative_cct = round((kelvin - 2700) * 255 / (6500 - 2700))
+            values = {"fx": 0, "cct": relative_cct, "col": [[0, 0, 0, 255]]}
+            capability_bit = 4
+        elif device["white"]:
+            values = {"fx": 0, "col": [[0, 0, 0, 255]]}
+            capability_bit = 2
+        else:
+            raise OutputError("This WLED device does not have a native white channel")
+        self._post_state(device, {
+            "on": True, "bri": self._brightness(brightness), "tt": 3,
+            "seg": self._segment_updates(device, capability_bit, values),
+        })
+
+    def set_preset(self, device: dict, preset_id: int):
+        preset_id = int(preset_id)
+        if not 1 <= preset_id <= 250:
+            raise OutputError("WLED preset ID must be from 1 to 250")
+        self._post_state(device, {"on": True, "ps": preset_id})
+
+    def probe(self, address: str) -> dict:
+        address = self.normalize_address(address)
+        response = self.session.get(f"http://{address}/json", timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        info = payload.get("info", {}) if isinstance(payload, dict) else {}
+        state = payload.get("state", {}) if isinstance(payload, dict) else {}
+        if not info or not info.get("ver"):
+            raise OutputError(f"{address} did not return WLED device information")
+        leds = info.get("leds", {})
+        segment_capabilities = leds.get("seglc") or []
+        segments = []
+        for index, segment in enumerate(state.get("seg", [])):
+            segment_id = int(segment.get("id", index))
+            light_capabilities = int(
+                segment_capabilities[segment_id]
+                if segment_id < len(segment_capabilities)
+                else leds.get("lc", 0) or 0
+            )
+            segments.append({"id": segment_id, "lc": light_capabilities})
+        combined_capabilities = 0
+        for light_capabilities in segment_capabilities:
+            combined_capabilities |= int(light_capabilities)
+        combined_capabilities |= int(leds.get("lc", 0) or 0)
+        modern_capabilities = bool(segment_capabilities) or "lc" in leds
+        rgb = bool(combined_capabilities & 1) if modern_capabilities else True
+        white = bool(combined_capabilities & 2) if modern_capabilities else bool(
+            leds.get("rgbw") or leds.get("wv")
+        )
+        cct = bool(combined_capabilities & 4) if modern_capabilities else bool(leds.get("cct"))
+        presets = []
+        try:
+            preset_response = self.session.get(f"http://{address}/presets.json", timeout=5)
+            preset_response.raise_for_status()
+            for preset_id, preset in preset_response.json().items():
+                if str(preset_id).isdigit() and isinstance(preset, dict):
+                    presets.append({"id": int(preset_id), "name": preset.get("n")})
+        except Exception:
+            log.info("Could not read WLED presets from %s", address, exc_info=True)
+        return self.normalize_device({
+            "id": info.get("device_id"),
+            "name": info.get("name"),
+            "address": info.get("ip") or address,
+            "mac": info.get("mac"),
+            "version": info.get("ver"),
+            "arch": info.get("arch"),
+            "led_count": leds.get("count", 0),
+            "rgb": rgb,
+            "white": white or cct,
+            "cct": cct,
+            "segments": segments,
+            "presets": presets,
+        })
+
+    @classmethod
+    def _mdns_addresses(cls, timeout: float) -> list[str]:
+        try:
+            from zeroconf import ServiceBrowser, ServiceListener, Zeroconf
+        except ImportError as exc:
+            raise OutputError("WLED discovery support is not installed") from exc
+
+        found = set()
+        lock = threading.Lock()
+
+        class Listener(ServiceListener):
+            def add_service(self, zeroconf, service_type, name):
+                info = zeroconf.get_service_info(service_type, name, timeout=1500)
+                if not info:
+                    return
+                with lock:
+                    for address in info.parsed_scoped_addresses():
+                        try:
+                            parsed = ipaddress.ip_address(address.split("%", 1)[0])
+                        except ValueError:
+                            continue
+                        if parsed.version == 4:
+                            found.add(str(parsed) if info.port == 80 else f"{parsed}:{info.port}")
+
+            def update_service(self, zeroconf, service_type, name):
+                self.add_service(zeroconf, service_type, name)
+
+            def remove_service(self, zeroconf, service_type, name):
+                pass
+
+        zeroconf = Zeroconf()
+        browser = ServiceBrowser(zeroconf, cls.SERVICE_TYPE, Listener())
+        try:
+            time.sleep(max(0.1, min(5.0, float(timeout))))
+        finally:
+            browser.cancel()
+            zeroconf.close()
+        return sorted(found)
+
+    def discover(
+        self, addresses: list[str] | None = None, address: str | None = None,
+        timeout: float = 2.0,
+    ) -> list[dict]:
+        candidates = {
+            self.normalize_address(candidate) for candidate in (addresses or [])
+            if str(candidate or "").strip()
+        }
+        if address:
+            candidates.add(self.normalize_address(address))
+        else:
+            try:
+                candidates.update(self._mdns_addresses(timeout))
+            except Exception:
+                if not candidates:
+                    raise
+                log.warning("WLED mDNS discovery failed; refreshing saved addresses only", exc_info=True)
+        if not candidates:
+            return []
+        devices = {}
+        errors = []
+        with ThreadPoolExecutor(max_workers=min(8, len(candidates))) as executor:
+            pending = {executor.submit(self.probe, candidate): candidate for candidate in candidates}
+            for future in as_completed(pending):
+                try:
+                    device = future.result()
+                    devices[device["id"]] = device
+                except Exception as exc:
+                    errors.append(f"{pending[future]}: {exc}")
+        if address and not devices:
+            raise OutputError(errors[0] if errors else "WLED device was not found")
+        return sorted(devices.values(), key=lambda device: (device["name"].lower(), device["id"]))
 
 
 class HomeAssistantClient:

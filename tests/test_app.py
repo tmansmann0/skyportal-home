@@ -25,6 +25,7 @@ def test_settings_are_on_a_separate_authenticated_page(tmp_path):
     assert response.status_code == 200
     assert b'id="goveeKey"' in response.data
     assert b'id="haUrl"' in response.data
+    assert b'id="wledAddress"' in response.data
     assert b'id="portalConfidence"' in response.data
     assert b'value="1.25"' in response.data
     assert b"settings.js" in response.data
@@ -168,6 +169,55 @@ def test_lifx_settings_store_only_normalized_device_metadata(tmp_path):
             "firmware_major": 2, "firmware_minor": 80,
             "product_name": "LIFX A19", "color": True,
             "temperature_range": [1500, 9000],
+        }],
+    }
+
+
+def test_wled_discovery_is_local_and_requires_authentication(tmp_path, monkeypatch):
+    class FakeWled:
+        def discover(self, addresses=None, address=None):
+            assert addresses == ["wled.local"]
+            assert address is None
+            return [{"id": "aabbccddeeff", "name": "Desk WLED", "address": "192.168.1.88"}]
+
+    monkeypatch.setattr(app_module, "WledClient", FakeWled)
+    web, _ = client(tmp_path)
+
+    assert web.post("/api/wled/discover").status_code == 302
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/wled/discover", json={"addresses": ["wled.local"]})
+
+    assert response.status_code == 200
+    assert response.get_json()["devices"][0]["name"] == "Desk WLED"
+
+
+def test_wled_settings_store_only_normalized_device_metadata(tmp_path):
+    web, store = client(tmp_path)
+    with web.session_transaction() as session:
+        session["authenticated"] = True
+
+    response = web.post("/api/settings", json={"wled": {
+        "brightness": 42,
+        "devices": [{
+            "id": "ignored", "name": "Desk WLED", "address": "http://192.168.1.88/",
+            "mac": "AA:BB:CC:DD:EE:FF", "version": "0.15.3", "arch": "esp32",
+            "led_count": 120, "rgb": True, "white": True, "cct": True,
+            "segments": [{"id": 0, "lc": 7}],
+            "presets": [{"id": 7, "name": "Party"}], "untrusted": "discard",
+        }],
+    }})
+
+    assert response.status_code == 200
+    assert store.data["wled"] == {
+        "brightness": 42,
+        "devices": [{
+            "id": "aabbccddeeff", "name": "Desk WLED", "address": "192.168.1.88",
+            "mac": "aabbccddeeff", "version": "0.15.3", "arch": "esp32",
+            "led_count": 120, "rgb": True, "white": True, "cct": True,
+            "segments": [{"id": 0, "lc": 7}],
+            "presets": [{"id": 7, "name": "Party"}],
         }],
     }
 

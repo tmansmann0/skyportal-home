@@ -32,6 +32,7 @@ def default_config() -> dict:
         "setup_token": secrets.token_urlsafe(24),
         "govee": {"api_key": "", "devices": [], "brightness": 75},
         "lifx": {"devices": [], "brightness": 75},
+        "wled": {"devices": [], "brightness": 75},
         "home_assistant": {"url": "", "token": ""},
         "element_colors": dict(ELEMENT_COLORS),
         "element_outputs": {},
