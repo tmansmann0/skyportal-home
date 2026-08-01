@@ -7,10 +7,32 @@ from threading import RLock
 from .figures import ELEMENT_COLORS
 
 
+def migrate_legacy_config(config: dict) -> dict:
+    govee = config.get("govee", {})
+    govee["devices"] = [
+        device for device in govee.get("devices", [])
+        if device.get("sku") != "DreamViewScenic"
+    ]
+    actions = list(config.get("element_actions", {}).values())
+    actions += list(config.get("element_combos", {}).values())
+    actions += list(config.get("figure_palettes", {}).values())
+    actions += list(config.get("powerup_palettes", {}).values())
+    actions.append(config.get("default_palette", {}))
+    for action in actions:
+        if not isinstance(action, dict):
+            continue
+        if action.get("action_mode") == "dreamview":
+            action["action_mode"] = "govee"
+        action.pop("dreamview_device", None)
+    return config
+
+
 def default_config() -> dict:
     return {
         "setup_token": secrets.token_urlsafe(24),
         "govee": {"api_key": "", "devices": [], "brightness": 75},
+        "lifx": {"devices": [], "brightness": 75},
+        "wled": {"devices": [], "brightness": 75},
         "home_assistant": {"url": "", "token": ""},
         "element_colors": dict(ELEMENT_COLORS),
         "element_outputs": {},
@@ -23,7 +45,12 @@ def default_config() -> dict:
         "recent_powerups": [],
         "history": [],
         "figure_overrides": {},
-        "behavior": {"on_remove": "leave", "remove_color": "#000000", "cooldown_seconds": 1.0},
+        "behavior": {
+            "on_remove": "leave",
+            "remove_color": "#000000",
+            "cooldown_seconds": 1.0,
+            "portal_confidence_seconds": 1.25,
+        },
     }
 
 
@@ -42,7 +69,7 @@ class ConfigStore:
                     base[key].update(value)
                 else:
                     base[key] = value
-        return base
+        return migrate_legacy_config(base)
 
     def save(self) -> None:
         with self.lock:

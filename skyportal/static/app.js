@@ -1,5 +1,7 @@
 const config = window.INITIAL_CONFIG;
 const selected = new Map((config.govee.devices || []).map(device => [device.device, device]));
+const selectedLifx = new Map((config.lifx?.devices || []).map(device => [device.serial, device]));
+const selectedWled = new Map((config.wled?.devices || []).map(device => [device.id, device]));
 let elementOutputs = structuredClone(config.element_outputs || {});
 let elementActions = structuredClone(config.element_actions || {});
 let elementCombos = structuredClone(config.element_combos || {});
@@ -11,6 +13,7 @@ let activeComboKey = null;
 let activeNamed = null;
 let currentState = {figures: [], recent_figures: config.recent_figures || [], recent_powerups: config.recent_powerups || [], history: config.history || []};
 const sceneCache = new Map();
+let sceneRefreshInFlight = false;
 let savedSignature = null;
 
 const $ = selector => document.querySelector(selector);
@@ -26,6 +29,58 @@ function capability(device, instance) {
   return (device.capabilities || []).find(item => item.instance === instance);
 }
 
+function individualDevices() {
+  const govee = [...selected.values()].map(device => ({...device, provider: 'govee'}));
+  const lifx = [...selectedLifx.values()].map(device => {
+    const capabilities = [];
+    if (device.color !== false) capabilities.push({type: 'lifx.color', instance: 'colorRgb'});
+    const hasRange = Object.prototype.hasOwnProperty.call(device, 'temperature_range');
+    const temperatureRange = hasRange ? device.temperature_range : [1500, 9000];
+    if (temperatureRange) capabilities.push({
+      type: 'lifx.color', instance: 'colorTemperatureK',
+      parameters: {range: {
+        min: temperatureRange[0], max: temperatureRange[1], precision: 1,
+      }},
+    });
+    return {
+      ...device,
+      provider: 'lifx',
+      device: `lifx:${device.serial}`,
+      deviceName: device.label,
+      sku: device.product_name || 'LIFX LAN',
+      capabilities,
+    };
+  });
+  const wled = [...selectedWled.values()].map(device => {
+    const capabilities = [];
+    if (device.rgb) capabilities.push({type: 'wled.color', instance: 'colorRgb'});
+    if (device.cct) capabilities.push({
+      type: 'wled.color', instance: 'colorTemperatureK',
+      parameters: {range: {min: 2700, max: 6500, precision: 50}},
+    });
+    else if (device.white) capabilities.push({type: 'wled.color', instance: 'whiteChannel'});
+    return {
+      ...device,
+      provider: 'wled',
+      device: `wled:${device.id}`,
+      deviceName: device.name,
+      sku: 'WLED LAN',
+      capabilities,
+    };
+  });
+  return [...govee, ...lifx, ...wled];
+}
+
+function defaultBrightness(device) {
+  return config[device.provider]?.brightness ?? 75;
+}
+
+function providerLabel(device) {
+  if (device.provider === 'lifx') return 'LIFX LAN';
+  if (device.provider === 'wled') return `${device.arch?.toUpperCase() || 'ESP'} · WLED ${device.version || ''}`;
+  return device.sku;
+}
+
 function namedCollection(kind) {
   return kind === 'figure' ? figurePalettes : powerupPalettes;
 }
@@ -39,7 +94,7 @@ function addNamedPalette(kind, id) {
   const figure = catalog[id];
   if (!figure) return;
   const collection = namedCollection(kind);
-  collection[id] ||= {color: elementColor(figure.element), outputs: {}, lights_enabled: true, ha_scene: ''};
+  collection[id] ||= {color: elementColor(figure.element), outputs: {}, action_mode: 'govee', ha_scene: ''};
   renderNamedPalettes(kind);
 }
 
@@ -71,7 +126,7 @@ function activeColor(deviceIndex = 0) {
   if (activeElement === 'default') return defaultPalette.color || elementColor('default');
   if (!activeComboKey) return elementColor(activeElement);
   const combo = elementCombos[activeComboKey];
-  const split = Math.ceil(selected.size / 2);
+  const split = Math.ceil(individualDevices().length / 2);
   const element = combo.elements[deviceIndex < split ? 0 : 1];
   return combo.colors[element] || elementColor(element);
 }
@@ -83,7 +138,8 @@ function profileFor(device, deviceIndex) {
   else if (activeComboKey) outputs = (elementCombos[activeComboKey].outputs ||= {});
   else outputs = (elementOutputs[activeElement] ||= {});
   outputs[device.device] ||= {
-    mode: 'color', color: activeColor(deviceIndex), brightness: config.govee.brightness,
+    mode: 'color', color: activeColor(deviceIndex),
+    brightness: defaultBrightness(device),
   };
   return outputs[device.device];
 }
@@ -98,12 +154,28 @@ function activeAction() {
 
 function renderPaletteAutomation() {
   const action = activeAction();
-  if (action.lights_enabled === undefined) action.lights_enabled = true;
+  action.action_mode ||= action.lights_enabled === false ? 'home_assistant' : 'govee';
+  if (!['govee', 'home_assistant'].includes(action.action_mode)) action.action_mode = 'govee';
   const box = $('#paletteAutomation');
-  box.innerHTML = `<label class="check-label"><input id="paletteLights" type="checkbox" ${action.lights_enabled ? 'checked' : ''}> Change Govee lights</label><label>Home Assistant scene<input id="paletteHaScene" placeholder="scene.portal_action" value="${escapeHtml(action.ha_scene || '')}"></label><small>Disable Govee lights to trigger only the Home Assistant scene.</small>`;
-  $('#paletteLights').onchange = event => { action.lights_enabled = event.target.checked; $('#customizeDevices').classList.toggle('disabled-profiles', !event.target.checked); };
-  $('#paletteHaScene').oninput = event => { action.ha_scene = event.target.value.trim(); };
-  $('#customizeDevices').classList.toggle('disabled-profiles', !action.lights_enabled);
+  box.innerHTML = `<div class="output-mode-tabs"><button type="button" data-mode="govee">Lights</button><button type="button" data-mode="home_assistant">Home Assistant</button></div><div id="outputModePanel" class="output-mode-panel"></div>`;
+  const renderMode = () => {
+    box.querySelectorAll('.output-mode-tabs button').forEach(button => button.classList.toggle('active', button.dataset.mode === action.action_mode));
+    const panel = $('#outputModePanel');
+    const devices = $('#customizeDevices');
+    devices.classList.toggle('hidden', action.action_mode !== 'govee');
+    if (action.action_mode === 'govee') {
+      panel.innerHTML = '<strong>Individual light controls</strong><span>Each selected Govee, LIFX, or WLED light can use color or native white with its own brightness. Compatible devices may also use Govee scenes/music or WLED presets.</span>';
+      renderCustomizeDevices();
+    } else {
+      panel.innerHTML = `<label>Home Assistant scene<input id="paletteHaScene" placeholder="scene.portal_action" value="${escapeHtml(action.ha_scene || '')}"></label><span>Only this Home Assistant scene will run.</span>`;
+      $('#paletteHaScene').oninput = event => { action.ha_scene = event.target.value.trim(); };
+    }
+  };
+  box.querySelectorAll('.output-mode-tabs button').forEach(button => button.onclick = () => {
+    action.action_mode = button.dataset.mode;
+    renderMode();
+  });
+  renderMode();
 }
 
 function musicValue(device, profile) {
@@ -114,6 +186,18 @@ function musicValue(device, profile) {
     sensitivity: profile.sensitivity ?? 50,
     autoColor: profile.autoColor ?? 1,
     rgb: parseInt((profile.color || activeColor()).slice(1), 16),
+  };
+}
+
+function whiteRange(device) {
+  const range = capability(device, 'colorTemperatureK')?.parameters?.range || {};
+  const fallback = device.provider === 'lifx' ? [1500, 9000] : device.provider === 'wled' ? [2700, 6500] : [2000, 9000];
+  const minimum = Number.isFinite(Number(range.min)) ? Number(range.min) : fallback[0];
+  const maximum = Number.isFinite(Number(range.max)) ? Number(range.max) : fallback[1];
+  return {
+    min: Math.min(minimum, maximum),
+    max: Math.max(minimum, maximum),
+    step: Math.max(50, Number(range.precision) || 1),
   };
 }
 
@@ -145,25 +229,52 @@ async function loadScenes(device, select, profile) {
   }
 }
 
+async function refreshSceneCache(force = true) {
+  if (sceneRefreshInFlight || !selected.size) return;
+  sceneRefreshInFlight = true;
+  try {
+    for (const device of selected.values()) {
+      if (!capability(device, 'lightScene') && !capability(device, 'diyScene')) continue;
+      const response = await fetch('/api/govee/scenes', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({device: device.device, refresh: force}),
+      });
+      const payload = await response.json();
+      if (payload.ok) sceneCache.set(device.device, payload.scenes);
+    }
+  } finally {
+    sceneRefreshInFlight = false;
+  }
+}
+
 function renderCustomizeDevices() {
   const box = $('#customizeDevices');
+  const devices = individualDevices();
   box.innerHTML = '';
-  if (!selected.size) {
-    box.innerHTML = '<div class="empty-state">Select at least one Govee light first.</div>';
+  if (!devices.length) {
+    box.innerHTML = '<div class="empty-state">Select at least one Govee, LIFX, or WLED light first.</div>';
     return;
   }
-  [...selected.values()].forEach((device, deviceIndex) => {
+  devices.forEach((device, deviceIndex) => {
     const profile = profileFor(device, deviceIndex);
+    const supportsColor = !!capability(device, 'colorRgb');
+    const supportsWhite = !!(capability(device, 'colorTemperatureK') || capability(device, 'whiteChannel'));
     const supportsScene = !!(capability(device, 'lightScene') || capability(device, 'diyScene'));
     const music = capability(device, 'musicMode');
+    const presets = device.provider === 'wled' ? (device.presets || []) : [];
     const card = document.createElement('article');
     card.className = 'light-profile';
-    const modes = [`<option value="color">Individual color</option>`];
+    const modes = [];
+    if (supportsColor) modes.push('<option value="color">Individual color</option>');
+    if (supportsWhite) modes.push(`<option value="white">${capability(device, 'colorTemperatureK') ? 'White temperature' : 'White channel'}</option>`);
     if (supportsScene) modes.push('<option value="scene">Govee scene</option>');
     if (music) modes.push('<option value="music">Music mode</option>');
-    card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(device.sku)}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
+    if (presets.length) modes.push('<option value="preset">WLED preset</option>');
+    if (!modes.length) modes.push('<option value="color">Individual color</option>');
+    card.innerHTML = `<div class="profile-head"><div><strong>${escapeHtml(device.deviceName || device.sku)}</strong><small>${escapeHtml(providerLabel(device))}</small></div><select class="profile-mode">${modes.join('')}</select></div><div class="profile-controls"></div>`;
     const mode = card.querySelector('.profile-mode');
-    mode.value = (profile.mode === 'scene' && !supportsScene) || (profile.mode === 'music' && !music) ? 'color' : profile.mode;
+    const supportedModes = [...mode.options].map(option => option.value);
+    mode.value = supportedModes.includes(profile.mode) ? profile.mode : supportedModes[0];
     profile.mode = mode.value;
     const controls = card.querySelector('.profile-controls');
 
@@ -171,14 +282,43 @@ function renderCustomizeDevices() {
       controls.innerHTML = '';
       profile.mode = mode.value;
       if (profile.mode === 'color') {
-        controls.innerHTML = `<label>Color<input class="profile-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label>Brightness <span>${profile.brightness || config.govee.brightness}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || config.govee.brightness}"></label>`;
+        const brightnessDefault = defaultBrightness(device);
+        controls.innerHTML = `<label>Color<input class="profile-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label>Brightness <span>${profile.brightness || brightnessDefault}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || brightnessDefault}"></label>`;
         controls.querySelector('.profile-color').oninput = event => { profile.color = event.target.value.toUpperCase(); };
         const brightness = controls.querySelector('.profile-brightness');
         brightness.oninput = event => { profile.brightness = +event.target.value; event.target.previousElementSibling.textContent = `${event.target.value}%`; };
+      } else if (profile.mode === 'white') {
+        const brightnessDefault = defaultBrightness(device);
+        const temperatureCapability = capability(device, 'colorTemperatureK');
+        if (temperatureCapability) {
+          const range = whiteRange(device);
+          const defaultKelvin = Math.max(range.min, Math.min(range.max, profile.kelvin ?? (device.provider === 'lifx' ? 3500 : 4000)));
+          profile.kelvin = defaultKelvin;
+          controls.innerHTML = `<label>White temperature <span>${defaultKelvin} K</span><input class="profile-temperature" type="range" min="${range.min}" max="${range.max}" step="${range.step}" value="${defaultKelvin}" ${range.min === range.max ? 'disabled' : ''}><small>Warm ${range.min} K · Cool ${range.max} K</small></label><label>Brightness <span>${profile.brightness || brightnessDefault}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || brightnessDefault}"></label>`;
+          const temperature = controls.querySelector('.profile-temperature');
+          temperature.oninput = event => {
+            profile.kelvin = +event.target.value;
+            event.target.previousElementSibling.textContent = `${event.target.value} K`;
+          };
+        } else {
+          controls.innerHTML = `<div class="white-channel-note"><strong>Dedicated white channel</strong><small>This WLED setup exposes white intensity without adjustable color temperature.</small></div><label>Brightness <span>${profile.brightness || brightnessDefault}%</span><input class="profile-brightness" type="range" min="1" max="100" value="${profile.brightness || brightnessDefault}"></label>`;
+        }
+        const brightness = controls.querySelector('.profile-brightness');
+        brightness.oninput = event => {
+          profile.brightness = +event.target.value;
+          event.target.previousElementSibling.textContent = `${event.target.value}%`;
+        };
       } else if (profile.mode === 'scene') {
         controls.innerHTML = '<label>Scene<select class="profile-scene"></select></label>';
         loadScenes(device, controls.querySelector('.profile-scene'), profile);
-      } else {
+      } else if (profile.mode === 'preset') {
+        const selectedPreset = profile.preset ?? presets[0].id;
+        profile.preset = +selectedPreset;
+        controls.innerHTML = `<label>Preset<select class="wled-preset">${presets.map(preset => `<option value="${preset.id}">${escapeHtml(preset.name)}</option>`).join('')}</select></label><div class="white-channel-note"><strong>Stored on WLED</strong><small>The preset controls its saved segments, effects, colors, and optional brightness.</small></div>`;
+        const preset = controls.querySelector('.wled-preset');
+        preset.value = selectedPreset;
+        preset.onchange = event => { profile.preset = +event.target.value; };
+      } else if (profile.mode === 'music') {
         const fields = music.parameters?.fields || [];
         const options = fields.find(field => field.fieldName === 'musicMode')?.options || [];
         controls.innerHTML = `<label>Music style<select class="music-style">${options.map(option => `<option value="${option.value}">${escapeHtml(option.name)}</option>`).join('')}</select></label><label>Sensitivity <span>${profile.sensitivity ?? 50}%</span><input class="music-sensitivity" type="range" min="0" max="100" value="${profile.sensitivity ?? 50}"></label><label>Base color<input class="music-color" type="color" value="${profile.color || activeColor(deviceIndex)}"></label><label class="check-label"><input class="music-auto" type="checkbox" ${profile.autoColor !== 0 ? 'checked' : ''}> Automatic colors</label>`;
@@ -211,7 +351,6 @@ async function openCustomize(element) {
   $('#customizeTitle').textContent = element === 'default' ? 'Customize No Skylander' : `Customize ${element[0].toUpperCase()}${element.slice(1)}`;
   await save(false);
   renderPaletteAutomation();
-  renderCustomizeDevices();
   $('#customizeDialog').showModal();
 }
 
@@ -223,7 +362,6 @@ async function openComboCustomize(key) {
   $('#customizeTitle').textContent = `Customize ${combo.elements.map(element => element[0].toUpperCase() + element.slice(1)).join(' + ')}`;
   await save(false);
   renderPaletteAutomation();
-  renderCustomizeDevices();
   $('#customizeDialog').showModal();
 }
 
@@ -234,7 +372,6 @@ async function openNamedCustomize(kind, id) {
   $('#customizeTitle').textContent = `Customize ${namedCatalog(kind)[id].name}`;
   await save(false);
   renderPaletteAutomation();
-  renderCustomizeDevices();
   $('#customizeDialog').showModal();
 }
 
@@ -294,7 +431,7 @@ function renderLibraryRecommendation(kind, currentIds, recentIds) {
   const ids = [...new Set([...currentIds, ...recentIds])].filter(id => catalog[id]).slice(0, 8);
   box.classList.toggle('hidden', !ids.length);
   if (!ids.length) return;
-  box.innerHTML = `<span><strong>${currentIds.length ? 'On portal now' : 'Recently used'}</strong></span><div class="recommendation-chips"></div>`;
+  box.innerHTML = `<span><strong>${currentIds.length ? 'On portal recently' : 'Recently used'}</strong></span><div class="recommendation-chips"></div>`;
   const chips = box.querySelector('.recommendation-chips');
   ids.forEach(id => {
     const button = document.createElement('button');
@@ -367,6 +504,33 @@ document.querySelectorAll('.test').forEach(button => button.onclick = async () =
 });
 $('#closeCustomize').onclick = () => $('#customizeDialog').close();
 $('#doneCustomize').onclick = () => $('#customizeDialog').close();
+$('#previewCustomize').onclick = async () => {
+  const status = $('#previewStatus');
+  const button = $('#previewCustomize');
+  button.disabled = true;
+  status.textContent = 'Applying…';
+  try {
+    await save(false);
+    let response;
+    if (activeNamed) {
+      response = await fetch(`/api/test-figure/${activeNamed.kind}/${activeNamed.id}`, {method: 'POST'});
+    } else if (activeComboKey) {
+      response = await fetch('/api/test-combo', {
+        method: 'POST', headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({elements: elementCombos[activeComboKey].elements}),
+      });
+    } else {
+      response = await fetch(`/api/test/${activeElement}`, {method: 'POST'});
+    }
+    const payload = await response.json();
+    if (!payload.ok) throw Error(payload.error || 'Preview failed');
+    status.textContent = 'Preview applied';
+  } catch (error) {
+    status.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+};
 $('#customizeDialog').onclick = event => { if (event.target === $('#customizeDialog')) $('#customizeDialog').close(); };
 
 function settingsBody() {
@@ -420,3 +584,14 @@ renderHistory();
 savedSignature = settingsSignature();
 updateSaveVisibility();
 setInterval(updateSaveVisibility, 250);
+const sceneSessionKey = 'skyportal-scenes-session-refreshed';
+if (!sessionStorage.getItem(sceneSessionKey)) {
+  sessionStorage.setItem(sceneSessionKey, String(Date.now()));
+  refreshSceneCache(true);
+}
+window.addEventListener('storage', event => {
+  if (event.key === 'skyportal-scenes-refresh') {
+    sceneCache.clear();
+    refreshSceneCache(false);
+  }
+});

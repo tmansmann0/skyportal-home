@@ -1,5 +1,33 @@
 # Changelog
 
+## 1.5.0 — 2026-07-31
+
+- Add ancestry-verified automatic updates from GitHub's `main` branch
+- Build each update separately and run the complete test suite before activation
+- Preserve configuration and automatically restore the prior build if the new
+  service fails its health check
+
+## 1.4.0 — 2026-07-13
+
+- Add an in-dialog preview action for every customizable palette
+- Refresh Govee scene and DIY-scene compatibility once per new dashboard tab
+  session, without periodic API polling
+- Refresh scene compatibility immediately during Govee device discovery
+- Route every palette through one mutually exclusive output mode: individual
+  Govee controls or a Home Assistant scene
+- Dispose stale libusb resources so the portal can recover after a USB
+  disconnect instead of remaining in an input/output error loop
+- Remove experimental DreamView group control after unreliable API behavior
+- Require portal identities to remain stable before changing palettes, with a
+  Settings slider from 0–5 seconds (1.25 seconds by default), while logging
+  rejected transient readings for diagnosis
+- Add local-network LIFX discovery, settings selection, and per-bulb
+  color/brightness palette output without requiring a cloud account
+- Add native white-temperature and brightness profiles for Govee and LIFX,
+  using each discovered device's supported Kelvin range
+- Add local ESP32/ESP8266 WLED support with mDNS/manual discovery, RGB,
+  RGBW/CCT white, brightness, all-segment output, and named presets
+
 ## 1.3.0 — 2026-07-12
 
 - Treat SWAP Force tops and bottoms as two current characters by default, with

@@ -7,7 +7,7 @@ from flask import Flask, jsonify, redirect, render_template, request, session, u
 from .config import ConfigStore
 from .controller import Controller
 from .figures import CHARACTERS, ELEMENT_COLORS, FIGURES, POWER_UPS
-from .outputs import GoveeClient
+from .outputs import GoveeClient, GoveeSceneCache, LifxLanClient, WledClient
 
 
 def create_app(store=None, start_controller=True):
@@ -15,6 +15,7 @@ def create_app(store=None, start_controller=True):
     store = store or ConfigStore()
     app.secret_key = os.environ.get("SKYPORTAL_SESSION_SECRET", store.data["setup_token"])
     controller = Controller(store)
+    scene_cache = GoveeSceneCache()
     app.extensions["skyportal_store"] = store
     app.extensions["skyportal_controller"] = controller
 
@@ -59,6 +60,8 @@ def create_app(store=None, start_controller=True):
     def settings():
         data = request.get_json(force=True)
         govee = data.get("govee", {})
+        lifx = data.get("lifx", {})
+        wled = data.get("wled", {})
         ha = data.get("home_assistant", {})
         if govee.get("api_key") and govee["api_key"] != "configured":
             store.data["govee"]["api_key"] = govee["api_key"].strip()
@@ -66,6 +69,26 @@ def create_app(store=None, start_controller=True):
             store.data["govee"]["devices"] = govee["devices"]
         if "brightness" in govee:
             store.data["govee"]["brightness"] = max(1, min(100, int(govee["brightness"])))
+        if "devices" in lifx:
+            normalized_lifx = []
+            for device in lifx["devices"]:
+                try:
+                    normalized_lifx.append(LifxLanClient.normalize_device(device))
+                except Exception:
+                    continue
+            store.data["lifx"]["devices"] = normalized_lifx
+        if "brightness" in lifx:
+            store.data["lifx"]["brightness"] = max(1, min(100, int(lifx["brightness"])))
+        if "devices" in wled:
+            normalized_wled = []
+            for device in wled["devices"]:
+                try:
+                    normalized_wled.append(WledClient.normalize_device(device))
+                except Exception:
+                    continue
+            store.data["wled"]["devices"] = normalized_wled
+        if "brightness" in wled:
+            store.data["wled"]["brightness"] = max(1, min(100, int(wled["brightness"])))
         if "element_colors" in data:
             for element in ELEMENT_COLORS:
                 value = data["element_colors"].get(element)
@@ -96,7 +119,18 @@ def create_app(store=None, start_controller=True):
         if "figure_overrides" in data:
             store.data["figure_overrides"] = data["figure_overrides"]
         if "behavior" in data:
-            store.data["behavior"].update(data["behavior"])
+            behavior = dict(data["behavior"])
+            if "portal_confidence_seconds" in behavior:
+                try:
+                    behavior["portal_confidence_seconds"] = max(
+                        0.0, min(5.0, float(behavior["portal_confidence_seconds"])),
+                    )
+                except (TypeError, ValueError):
+                    return jsonify({
+                        "ok": False,
+                        "error": "Portal confidence must be a number from 0 to 5 seconds.",
+                    }), 400
+            store.data["behavior"].update(behavior)
         history = store.data.setdefault("history", [])
         history.insert(0, {"at": time.time(), "event": "settings", "label": "Configuration saved", "detail": ""})
         del history[50:]
@@ -111,9 +145,52 @@ def create_app(store=None, start_controller=True):
         if not key or key == "configured":
             return jsonify({"ok": False, "error": "Enter a Govee API key first."}), 400
         try:
-            devices = GoveeClient(key).discover()
-            lights = [d for d in devices if any(c.get("instance") == "colorRgb" for c in d.get("capabilities", []))]
-            return jsonify({"ok": True, "devices": lights})
+            client = GoveeClient(key)
+            devices = client.discover()
+            lights = [d for d in devices if any(
+                c.get("instance") in ("colorRgb", "colorTemperatureK")
+                for c in d.get("capabilities", [])
+            )]
+            scene_errors = []
+            refreshed = 0
+            scene_devices = [device for device in lights if any(
+                capability.get("instance") in ("lightScene", "diyScene")
+                for capability in device.get("capabilities", [])
+            )]
+            for device in scene_devices:
+                try:
+                    scene_cache.get(client, device, force=True)
+                    refreshed += 1
+                except Exception as exc:
+                    scene_errors.append(f"{device.get('deviceName') or device.get('sku')}: {exc}")
+            return jsonify({
+                "ok": True, "devices": lights, "scene_devices": len(scene_devices),
+                "scenes_refreshed": refreshed,
+                "scene_errors": scene_errors,
+            })
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.post("/api/lifx/discover")
+    @authenticated
+    def discover_lifx():
+        try:
+            return jsonify({"ok": True, "devices": LifxLanClient().discover()})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.post("/api/wled/discover")
+    @authenticated
+    def discover_wled():
+        candidate = request.get_json(silent=True) or {}
+        addresses = candidate.get("addresses", [])
+        if not isinstance(addresses, list):
+            addresses = []
+        try:
+            devices = WledClient().discover(
+                addresses=addresses[:32], address=candidate.get("address"),
+            )
+            return jsonify({"ok": True, "devices": devices})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
 
@@ -129,7 +206,8 @@ def create_app(store=None, start_controller=True):
         if not key:
             return jsonify({"ok": False, "error": "Configure a Govee API key first."}), 400
         try:
-            return jsonify({"ok": True, "scenes": GoveeClient(key).discover_scenes(device)})
+            scenes = scene_cache.get(GoveeClient(key), device, force=bool(candidate.get("refresh")))
+            return jsonify({"ok": True, "scenes": scenes})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
 
@@ -142,7 +220,7 @@ def create_app(store=None, start_controller=True):
             if element == "default":
                 controller.handle_default()
             else:
-                controller.handle_figure(next(fid for fid, f in FIGURES.items() if f["element"] == element))
+                controller.preview_element(element)
             return jsonify({"ok": True})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502
@@ -156,6 +234,19 @@ def create_app(store=None, start_controller=True):
         try:
             figures = [next(figure for figure in FIGURES.values() if figure["element"] == element) for element in elements]
             controller.handle_figures(figures)
+            return jsonify({"ok": True})
+        except Exception as exc:
+            return jsonify({"ok": False, "error": str(exc)}), 502
+
+    @app.post("/api/test-figure/<kind>/<int:character_id>")
+    @authenticated
+    def test_figure(kind, character_id):
+        catalog = CHARACTERS if kind == "figure" else POWER_UPS if kind == "powerup" else {}
+        figure = catalog.get(character_id)
+        if not figure:
+            return jsonify({"ok": False, "error": "Unknown palette figure."}), 404
+        try:
+            controller.handle_figure(character_id, figure.get("variant_id", 0), figure)
             return jsonify({"ok": True})
         except Exception as exc:
             return jsonify({"ok": False, "error": str(exc)}), 502

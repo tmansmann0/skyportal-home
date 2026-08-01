@@ -3,24 +3,39 @@ import threading
 import time
 
 from .figures import identify, identify_all_present
-from .outputs import GoveeClient, HomeAssistantClient
+from .outputs import GoveeClient, HomeAssistantClient, LifxLanClient, WledClient
 from .portal import Portal
 
 log = logging.getLogger(__name__)
+PORTAL_CONFIDENCE_SECONDS = 1.25
 
 
 class Controller:
-    def __init__(self, store, portal_factory=Portal):
+    def __init__(self, store, portal_factory=Portal, confidence_seconds=None):
         self.store = store
         self.portal_factory = portal_factory
+        self.confidence_seconds = confidence_seconds
         self.portal = None
         self.stop_event = threading.Event()
         self.thread = None
         self.last_slots = {}
+        self.pending_slots = None
+        self.pending_since = None
         self.state = {
             "portal": "disconnected", "figure": None, "figures": [],
             "last_error": None, "updated_at": None,
         }
+
+    def _confidence_window(self) -> float:
+        if self.confidence_seconds is not None:
+            return float(self.confidence_seconds)
+        try:
+            configured = self.store.data.get("behavior", {}).get(
+                "portal_confidence_seconds", PORTAL_CONFIDENCE_SECONDS,
+            )
+            return max(0.0, min(5.0, float(configured)))
+        except (TypeError, ValueError):
+            return PORTAL_CONFIDENCE_SECONDS
 
     def start(self):
         if not self.thread or not self.thread.is_alive():
@@ -41,13 +56,15 @@ class Controller:
                     self.state["portal"] = "connected"
                 slots = self.portal.status()
                 current = {slot: self.portal.read_identity(slot) for slot in slots}
-                if current and current != self.last_slots:
-                    self.handle_figures(identify_all_present(list(current.values())))
+                previous = self.last_slots
+                if self._transition_confirmed(current):
+                    self.last_slots = current
+                    if current:
+                        self.handle_figures(identify_all_present(list(current.values())))
+                    elif previous:
+                        self.handle_remove()
                 if not current and not self.last_slots and self.state["updated_at"] is None:
                     self.handle_default()
-                if self.last_slots and not current:
-                    self.handle_remove()
-                self.last_slots = current
                 time.sleep(0.25)
             except Exception as exc:
                 log.exception("Portal loop error")
@@ -59,6 +76,38 @@ class Controller:
                         pass
                 self.portal = None
                 self.stop_event.wait(2)
+
+    def _transition_confirmed(self, current: dict, now=None) -> bool:
+        now = time.monotonic() if now is None else now
+        confidence_seconds = self._confidence_window()
+        if current == self.last_slots:
+            if self.pending_slots is not None:
+                log.warning(
+                    "Rejected transient portal reading after %.2fs: %r",
+                    now - self.pending_since, self.pending_slots,
+                )
+            self.pending_slots = None
+            self.pending_since = None
+            return False
+        if current != self.pending_slots:
+            if self.pending_slots is not None:
+                log.warning("Portal candidate changed before confirmation: %r", self.pending_slots)
+            if confidence_seconds == 0:
+                self.pending_slots = None
+                self.pending_since = None
+                return True
+            self.pending_slots = dict(current)
+            self.pending_since = now
+            log.info(
+                "Portal change candidate; waiting %.2fs for confirmation: %r",
+                confidence_seconds, current,
+            )
+            return False
+        if now - self.pending_since < confidence_seconds:
+            return False
+        self.pending_slots = None
+        self.pending_since = None
+        return True
 
     def _record(self, event: str, label: str, detail: str = ""):
         entry = {"at": time.time(), "event": event, "label": label, "detail": detail}
@@ -84,38 +133,106 @@ class Controller:
         if scene and ha["url"] and ha["token"]:
             HomeAssistantClient(ha["url"], ha["token"]).activate_scene(scene)
 
-    def _apply_outputs(self, base_color: str, outputs: dict, lights_enabled: bool = True):
+    def _individual_devices(self):
+        govee = [
+            {**device, "provider": "govee"}
+            for device in self.store.data["govee"]["devices"]
+        ]
+        lifx = [
+            {
+                **device,
+                "provider": "lifx",
+                "device": f"lifx:{device['serial']}",
+                "deviceName": device.get("label") or "LIFX bulb",
+                "sku": "LIFX LAN",
+            }
+            for device in self.store.data.get("lifx", {}).get("devices", [])
+        ]
+        wled = [
+            {
+                **device,
+                "provider": "wled",
+                "device": f"wled:{device['id']}",
+                "deviceName": device.get("name") or "WLED device",
+                "sku": "WLED LAN",
+            }
+            for device in self.store.data.get("wled", {}).get("devices", [])
+        ]
+        return [*govee, *lifx, *wled]
+
+    def _apply_outputs(self, base_color: str, outputs: dict):
         config = self.store.data
-        if not lights_enabled or not config["govee"]["api_key"]:
-            return []
-        client = GoveeClient(config["govee"]["api_key"])
+        govee_client = (
+            GoveeClient(config["govee"]["api_key"])
+            if config["govee"]["api_key"] else None
+        )
+        lifx_client = LifxLanClient()
+        wled_client = WledClient()
         errors = []
-        for device in config["govee"]["devices"]:
+        for device in self._individual_devices():
             try:
                 output = outputs.get(device["device"], {})
-                if output.get("mode") in ("scene", "music") and output.get("capability"):
-                    client.set_capability(device, output["capability"])
+                brightness = int(output.get(
+                    "brightness",
+                    config.get(device["provider"], {}).get("brightness", 75),
+                ))
+                if device["provider"] == "wled":
+                    if output.get("mode") == "preset":
+                        wled_client.set_preset(device, int(output.get("preset", 1)))
+                    elif output.get("mode") == "white" or (
+                        not device.get("rgb", True) and device.get("white", False)
+                    ):
+                        wled_client.set_white(
+                            device, int(output.get("kelvin", 4000)), brightness,
+                        )
+                    else:
+                        wled_client.set_color(
+                            device, output.get("color") or base_color, brightness,
+                        )
+                elif device["provider"] == "lifx":
+                    if output.get("mode") == "white":
+                        lifx_client.set_white(
+                            device, int(output.get("kelvin", 3500)), brightness,
+                        )
+                    else:
+                        lifx_client.set_color(
+                            device, output.get("color") or base_color, brightness,
+                        )
+                elif not govee_client:
+                    continue
+                elif output.get("mode") in ("scene", "music") and output.get("capability"):
+                    govee_client.set_capability(device, output["capability"])
+                elif output.get("mode") == "white":
+                    govee_client.set_white(
+                        device, int(output.get("kelvin", 4000)), brightness,
+                    )
                 else:
-                    client.set_color(
-                        device, output.get("color") or base_color,
-                        int(output.get("brightness", config["govee"]["brightness"])),
+                    govee_client.set_color(
+                        device, output.get("color") or base_color, brightness,
                     )
             except Exception as exc:
                 name = device.get("deviceName") or device.get("sku") or device["device"]
-                log.exception("Govee output error for %s", name)
+                log.exception("Light output error for %s", name)
                 errors.append(f"{name}: {exc}")
         return errors
 
     def _activate_palette(self, label: str, color: str, outputs: dict, action: dict, event="palette"):
         errors = []
-        try:
-            self._activate_ha(action.get("ha_scene", ""))
-        except Exception as exc:
-            log.exception("Home Assistant output error")
-            errors.append(f"Home Assistant: {exc}")
-        errors.extend(self._apply_outputs(color, outputs, action.get("lights_enabled", True)))
+        mode = action.get("action_mode")
+        if not mode:
+            mode = "home_assistant" if action.get("lights_enabled") is False else "govee"
+        detail = ""
+        if mode == "home_assistant":
+            detail = action.get("ha_scene", "")
+            try:
+                self._activate_ha(detail)
+            except Exception as exc:
+                log.exception("Home Assistant output error")
+                errors.append(f"Home Assistant: {exc}")
+        else:
+            errors.extend(self._apply_outputs(color, outputs))
         self.state["last_error"] = "; ".join(errors) if errors else None
-        self._record(event, label, action.get("ha_scene", ""))
+        self._record(event, label, detail)
 
     def handle_figure(self, character_id: int, variant_id: int = 0, figure=None):
         figure = dict(figure or identify(character_id, variant_id))
@@ -154,7 +271,7 @@ class Controller:
             self.state["figures"] = figures
             return
         config = self.store.data
-        devices = config["govee"]["devices"]
+        devices = self._individual_devices()
         distinct_elements = []
         for figure in figures:
             if figure["element"] not in distinct_elements:
@@ -194,6 +311,22 @@ class Controller:
             self.portal.set_color(color)
         self.state.update({"figure": None, "figures": [], "updated_at": time.time()})
         self._activate_palette("No Skylander", color, profile.get("outputs", {}), profile, "default")
+
+    def preview_element(self, element: str):
+        config = self.store.data
+        color = config["element_colors"].get(element, config["element_colors"].get("unknown", "#708090"))
+        preview = {
+            "id": -1, "variant_id": 0, "name": f"{element.title()} preview",
+            "element": element, "color": color, "preview": True,
+        }
+        self.state.update({"figure": preview, "figures": [], "updated_at": time.time()})
+        if self.portal:
+            self.portal.set_color(color)
+        self._activate_palette(
+            f"{element.title()} preview", color,
+            config.get("element_outputs", {}).get(element, {}),
+            config.get("element_actions", {}).get(element, {}), "preview",
+        )
 
     def handle_remove(self):
         self.handle_default()
