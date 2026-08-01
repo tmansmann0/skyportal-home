@@ -28,6 +28,7 @@ Designed for Raspberry Pi Zero 2 W and Raspberry Pi OS Bookworm (64-bit or 32-bi
 - Durable recent activity history
 - Password-protected local setup UI on port `8099`
 - Automatic startup and portal reconnection through systemd
+- Safe automatic updates from the GitHub `main` branch
 - Local-only secret storage with `0600` permissions
 
 Xbox 360 and Xbox One portals are not supported because they use Xbox-specific USB/authentication behavior. A Wii, Wii U, PS3, or PS4 USB portal is the safe choice.
@@ -92,6 +93,26 @@ sudo systemctl restart skyportal-home
 ```
 
 Health endpoint: `http://raspberrypi.local:8099/health`
+
+### Automatic updates
+
+The Pi checks this repository's `main` branch approximately every six hours,
+with a randomized delay to avoid every installation checking simultaneously.
+It only accepts commits that descend from the installed revision, builds the
+update in a separate directory, and runs the complete test suite before any
+downtime. Configuration in `/var/lib/skyportal-home/config.json` is preserved.
+If the updated service does not pass its health check, the previous build is
+restored automatically.
+
+To check immediately or inspect update logs:
+
+```bash
+sudo systemctl start skyportal-home-update.service
+sudo journalctl -u skyportal-home-update.service
+```
+
+The repository and branch can be overridden in the update service with the
+`SKYPORTAL_UPDATE_REPO` and `SKYPORTAL_UPDATE_BRANCH` environment variables.
 
 ## Development
 

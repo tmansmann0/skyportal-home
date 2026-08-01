@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.5.0 — 2026-07-31
+
+- Add ancestry-verified automatic updates from GitHub's `main` branch
+- Build each update separately and run the complete test suite before activation
+- Preserve configuration and automatically restore the prior build if the new
+  service fails its health check
+
 ## 1.4.0 — 2026-07-13
 
 - Add an in-dialog preview action for every customizable palette

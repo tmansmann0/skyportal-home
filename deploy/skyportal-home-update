@@ -1,0 +1,305 @@
+#!/usr/bin/env python3
+"""Safely update SkyPortal Home from the configured GitHub branch."""
+
+from __future__ import annotations
+
+import argparse
+import fcntl
+import logging
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import urllib.request
+import zipfile
+
+
+APP_DIR = Path(os.environ.get("SKYPORTAL_APP_DIR", "/opt/skyportal-home"))
+STATE_DIR = Path(
+    os.environ.get("SKYPORTAL_UPDATE_STATE_DIR", "/var/lib/skyportal-home/updater")
+)
+REPO_URL = os.environ.get(
+    "SKYPORTAL_UPDATE_REPO", "https://github.com/tmansmann0/skyportal-home.git"
+)
+BRANCH = os.environ.get("SKYPORTAL_UPDATE_BRANCH", "main")
+SERVICE = os.environ.get("SKYPORTAL_SERVICE", "skyportal-home")
+HEALTH_URL = os.environ.get("SKYPORTAL_HEALTH_URL", "http://127.0.0.1:8099/health")
+PREVIOUS_DIR = APP_DIR.with_name(f"{APP_DIR.name}.previous")
+
+LOG = logging.getLogger("skyportal-update")
+
+
+class UpdateSkipped(Exception):
+    """A safe, expected reason not to install the remote revision."""
+
+
+def run(
+    command: list[str],
+    *,
+    cwd: Path | None = None,
+    timeout: int = 120,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    LOG.info("Running: %s", " ".join(command))
+    env = os.environ.copy()
+    env["GIT_TERMINAL_PROMPT"] = "0"
+    try:
+        return subprocess.run(
+            command,
+            cwd=cwd,
+            env=env,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            timeout=timeout,
+            check=check,
+        )
+    except subprocess.CalledProcessError as exc:
+        if exc.stdout:
+            LOG.error("Command output:\n%s", exc.stdout.rstrip())
+        raise
+
+
+def git(*arguments: str, cwd: Path, timeout: int = 120, check: bool = True):
+    return run(["git", *arguments], cwd=cwd, timeout=timeout, check=check)
+
+
+def ensure_checkout() -> tuple[Path, str]:
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    repo_dir = STATE_DIR / "repository"
+    if not (repo_dir / ".git").is_dir():
+        if repo_dir.exists():
+            shutil.rmtree(repo_dir)
+        git("clone", "--no-tags", REPO_URL, str(repo_dir), cwd=STATE_DIR, timeout=300)
+    else:
+        git("remote", "set-url", "origin", REPO_URL, cwd=repo_dir)
+
+    git("fetch", "--prune", "--no-tags", "origin", BRANCH, cwd=repo_dir, timeout=300)
+    revision = git("rev-parse", "FETCH_HEAD", cwd=repo_dir).stdout.strip()
+    return repo_dir, revision
+
+
+def installed_revision() -> str:
+    revision_file = APP_DIR / "REVISION"
+    if not revision_file.is_file():
+        raise UpdateSkipped(
+            "the installed build has no REVISION marker; refusing an unverified replacement"
+        )
+    return revision_file.read_text(encoding="utf-8").strip()
+
+
+def verify_forward_update(repo_dir: Path, installed: str, remote: str) -> None:
+    if installed == remote:
+        raise UpdateSkipped(f"already current at {remote[:12]}")
+
+    known = git(
+        "cat-file", "-e", f"{installed}^{{commit}}", cwd=repo_dir, check=False
+    )
+    if known.returncode != 0:
+        raise UpdateSkipped(
+            f"installed revision {installed[:12]} is not in the GitHub history; "
+            "refusing a possible downgrade"
+        )
+
+    ancestry = git(
+        "merge-base", "--is-ancestor", installed, remote, cwd=repo_dir, check=False
+    )
+    if ancestry.returncode != 0:
+        raise UpdateSkipped(
+            f"GitHub revision {remote[:12]} does not descend from installed revision "
+            f"{installed[:12]}; refusing a rollback or force-push"
+        )
+
+
+def extract_revision(repo_dir: Path, revision: str, destination: Path) -> None:
+    archive_path = STATE_DIR / f"{revision}.zip"
+    try:
+        git(
+            "archive",
+            "--format=zip",
+            f"--output={archive_path}",
+            revision,
+            cwd=repo_dir,
+            timeout=300,
+        )
+        destination.mkdir(parents=True)
+        root = destination.resolve()
+        with zipfile.ZipFile(archive_path) as archive:
+            for member in archive.infolist():
+                target = (destination / member.filename).resolve()
+                if target != root and root not in target.parents:
+                    raise RuntimeError(f"unsafe path in repository archive: {member.filename}")
+            archive.extractall(destination)
+    finally:
+        archive_path.unlink(missing_ok=True)
+
+
+def prepare_candidate(repo_dir: Path, revision: str) -> Path:
+    candidate = APP_DIR.with_name(f"{APP_DIR.name}.candidate-{os.getpid()}")
+    if candidate.exists():
+        shutil.rmtree(candidate)
+    extract_revision(repo_dir, revision, candidate)
+
+    required = [candidate / "skyportal", candidate / "requirements.txt", candidate / "tests"]
+    if not all(path.exists() for path in required):
+        raise RuntimeError("GitHub revision is missing required application or test files")
+
+    run([sys.executable, "-m", "venv", str(candidate / ".venv")], timeout=300)
+    pip = str(candidate / ".venv" / "bin" / "pip")
+    python = str(candidate / ".venv" / "bin" / "python")
+    requirements = (
+        candidate / "requirements-dev.txt"
+        if (candidate / "requirements-dev.txt").is_file()
+        else candidate / "requirements.txt"
+    )
+    run(
+        [pip, "install", "--disable-pip-version-check", "--no-cache-dir", "-r", str(requirements)],
+        timeout=1800,
+    )
+    run([python, "-m", "pytest", "-q"], cwd=candidate, timeout=900)
+    (candidate / "REVISION").write_text(f"{revision}\n", encoding="utf-8")
+    return candidate
+
+
+def service_health(timeout: int = 40) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        try:
+            with urllib.request.urlopen(HEALTH_URL, timeout=3) as response:
+                if response.status == 200:
+                    return True
+        except Exception:
+            time.sleep(1)
+    return False
+
+
+def install_file(source: Path, destination: Path, mode: int) -> None:
+    if not source.is_file():
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as temporary:
+        temporary_path = Path(temporary.name)
+    try:
+        shutil.copyfile(source, temporary_path)
+        temporary_path.chmod(mode)
+        os.replace(temporary_path, destination)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def refresh_deployment_files() -> None:
+    deploy_dir = APP_DIR / "deploy"
+    install_file(
+        deploy_dir / "skyportal-home-update",
+        Path("/usr/local/sbin/skyportal-home-update"),
+        0o755,
+    )
+    for name in (
+        "skyportal-home.service",
+        "skyportal-home-update.service",
+        "skyportal-home-update.timer",
+    ):
+        install_file(deploy_dir / name, Path("/etc/systemd/system") / name, 0o644)
+    run(["systemctl", "daemon-reload"])
+    run(["systemctl", "enable", "skyportal-home-update.timer"])
+
+
+def restore_previous(revision: str) -> None:
+    run(["systemctl", "stop", SERVICE], check=False)
+    failed_dir = APP_DIR.with_name(f"{APP_DIR.name}.failed-{revision[:12]}")
+    if failed_dir.exists():
+        shutil.rmtree(failed_dir)
+    if APP_DIR.exists():
+        APP_DIR.rename(failed_dir)
+    if not PREVIOUS_DIR.exists():
+        raise RuntimeError("the previous release is missing; automatic rollback is impossible")
+    PREVIOUS_DIR.rename(APP_DIR)
+    run(["systemctl", "start", SERVICE])
+    if not service_health():
+        raise RuntimeError("rollback completed, but the previous service is unhealthy")
+    if failed_dir.exists():
+        shutil.rmtree(failed_dir)
+
+
+def activate(candidate: Path, revision: str) -> None:
+    run(["systemctl", "stop", SERVICE], check=False)
+    previous_created = False
+    try:
+        if PREVIOUS_DIR.exists():
+            shutil.rmtree(PREVIOUS_DIR)
+        APP_DIR.rename(PREVIOUS_DIR)
+        previous_created = True
+        candidate.rename(APP_DIR)
+        run(["systemctl", "start", SERVICE])
+        if not service_health():
+            status = run(
+                ["systemctl", "status", SERVICE, "--no-pager"], check=False
+            ).stdout.strip()
+            raise RuntimeError(f"new service failed its health check\n{status}")
+    except Exception:
+        LOG.exception("Revision %s failed; rolling back", revision[:12])
+        if previous_created:
+            restore_previous(revision)
+        else:
+            run(["systemctl", "start", SERVICE], check=False)
+        raise
+
+    refresh_deployment_files()
+    LOG.info("Updated SkyPortal Home to %s", revision)
+
+
+def update(check_only: bool = False) -> None:
+    if os.geteuid() != 0:
+        raise PermissionError("the updater must run as root")
+    if shutil.which("git") is None:
+        raise RuntimeError("git is required for automatic updates")
+
+    STATE_DIR.mkdir(parents=True, exist_ok=True)
+    with (STATE_DIR / "update.lock").open("w", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        repo_dir, remote = ensure_checkout()
+        installed = installed_revision()
+        LOG.info(
+            "Installed revision %s; GitHub %s is %s",
+            installed[:12],
+            BRANCH,
+            remote[:12],
+        )
+        verify_forward_update(repo_dir, installed, remote)
+        if check_only:
+            LOG.info("A forward update is available; check-only mode will not install it")
+            return
+        candidate = prepare_candidate(repo_dir, remote)
+        try:
+            activate(candidate, remote)
+        finally:
+            if candidate.exists():
+                shutil.rmtree(candidate)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--check-only", action="store_true", help="check GitHub without installing"
+    )
+    args = parser.parse_args()
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
+    try:
+        update(check_only=args.check_only)
+    except UpdateSkipped as exc:
+        LOG.info("No update installed: %s", exc)
+        return 0
+    except BlockingIOError:
+        LOG.info("Another update check is already running")
+        return 0
+    except Exception:
+        LOG.exception("Automatic update failed; the installed version was left in place")
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

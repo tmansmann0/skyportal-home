@@ -11,7 +11,7 @@ DATA_DIR=/var/lib/skyportal-home
 SERVICE_USER=skyportal
 
 apt-get update
-apt-get install -y python3 python3-venv python3-dev libhidapi-hidraw0 libhidapi-dev build-essential
+apt-get install -y python3 python3-venv python3-dev git libhidapi-hidraw0 libhidapi-dev build-essential
 
 if ! getent group "$SERVICE_USER" >/dev/null 2>&1; then
   groupadd --system "$SERVICE_USER"
@@ -21,7 +21,13 @@ if ! id "$SERVICE_USER" >/dev/null 2>&1; then
 fi
 
 mkdir -p "$APP_DIR" "$DATA_DIR"
-cp -R skyportal requirements.txt pyproject.toml "$APP_DIR"/
+cp -R skyportal deploy tests requirements.txt requirements-dev.txt pyproject.toml "$APP_DIR"/
+if REVISION=$(git rev-parse HEAD 2>/dev/null); then
+  printf '%s\n' "$REVISION" > "$APP_DIR/REVISION"
+else
+  echo "The installer must be run from a Git checkout so automatic updates can verify ancestry."
+  exit 1
+fi
 python3 -m venv "$APP_DIR/.venv"
 "$APP_DIR/.venv/bin/pip" install --upgrade pip
 "$APP_DIR/.venv/bin/pip" install -r "$APP_DIR/requirements.txt"
@@ -42,10 +48,14 @@ fi
 
 install -m 0644 deploy/60-skylanders-portal.rules /etc/udev/rules.d/60-skylanders-portal.rules
 install -m 0644 deploy/skyportal-home.service /etc/systemd/system/skyportal-home.service
+install -m 0755 deploy/skyportal-home-update /usr/local/sbin/skyportal-home-update
+install -m 0644 deploy/skyportal-home-update.service /etc/systemd/system/skyportal-home-update.service
+install -m 0644 deploy/skyportal-home-update.timer /etc/systemd/system/skyportal-home-update.timer
 udevadm control --reload-rules
 udevadm trigger
 systemctl daemon-reload
 systemctl enable --now skyportal-home
+systemctl enable --now skyportal-home-update.timer
 
 sleep 2
 TOKEN=$(python3 -c 'import json; print(json.load(open("/var/lib/skyportal-home/config.json"))["setup_token"])')
